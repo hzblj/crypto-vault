@@ -30,8 +30,9 @@ yarn changeset               # describe a change for the next release
 
 ## Conventions that bite
 
-**nitro-crypto comes first.** The vault needs `@hzblj/nitro-crypto` 0.1.3 or later: its `bip39-entropy` capability and
-native interop (ADR 0008 there). A change the vault needs in the engine is a release there first.
+**nitro-crypto comes first.** The vault needs `@hzblj/nitro-crypto` 0.1.4 or later: its `bip39-entropy` and
+`backup-argon2id` capabilities and native interop (ADRs 0008 and 0009 there). A change the vault needs in the engine is
+a release there first.
 
 **Nothing JavaScript can call returns entropy.** The C++ binding is the only caller of the platform halves
 (`cpp/VaultPlatform.h`); they are not Hybrid Objects, so JavaScript cannot create one. `revealMnemonic` is the one call

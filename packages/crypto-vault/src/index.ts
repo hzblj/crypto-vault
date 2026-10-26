@@ -9,7 +9,8 @@ let host: CryptoVault | undefined
 
 /**
  * The device's vault, over the engine `crypto` runs on: the wallets it unlocks are that engine's, with its chains.
- * Refuses to start on an engine without the `bip39-entropy` capability (`@hzblj/nitro-crypto` 0.1.3 and later).
+ * Refuses to start on an engine without the `bip39-entropy` capability (`@hzblj/nitro-crypto` 0.1.3 and later);
+ * backups need `backup-argon2id` too (0.1.4), which `backupSupported` says.
  */
 export const createVault = <Chains>(crypto: CryptoEngine<Chains>): Vault<Chains> => {
   host ??= NitroModules.createHybridObject<CryptoVault>('CryptoVault')
@@ -23,5 +24,13 @@ export const createVault = <Chains>(crypto: CryptoEngine<Chains>): Vault<Chains>
 
 export {isVaultError, VAULT_ERROR_CODES, VaultError, type VaultErrorCode} from './errors'
 export type {Access, Protection} from './specs/crypto-vault.nitro'
-export type {CreateOptions, PromptOptions, SealOptions, Vault} from './vault'
+export {
+  type BackupOptions,
+  type CreateOptions,
+  MIN_PASSWORD_LENGTH,
+  type PromptOptions,
+  type RestoreOptions,
+  type SealOptions,
+  type Vault,
+} from './vault'
 export {VERSION} from './version'

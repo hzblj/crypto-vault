@@ -28,8 +28,10 @@ const vault = createVault(crypto) // over the engine the app already made, with 
 | `vault.importMnemonic(id, words, {access?, prompt?})` | A wallet restored from its words, sealed under `id`; the words cross as bytes the vault overwrites |
 | `vault.unlock(id, {prompt})` | After the system prompt, the entry as an `EphemeralWallet` in the engine |
 | `vault.revealMnemonic(id, {prompt})` | After the system prompt, the entry's words, for the user to write down |
+| `vault.backup(id, {password, prompt})` | After the system prompt, the entry sealed under a password: a `Uint8Array` that is safe to store anywhere |
+| `vault.restore(id, backup, {password, access?, prompt?})` | A wallet restored from a backup, sealed under `id`, the entropy never in JavaScript |
 | `vault.has(id)`, `vault.protection(id)`, `vault.access(id)` | Whether there is an entry, what holds its key, who opens it |
-| `vault.availableProtection` | What a new entry gets on this device |
+| `vault.availableProtection`, `vault.backupSupported` | What a new entry gets on this device; whether the engine seals backups |
 | `vault.remove(id)` | Deletes the entry and its key |
 
 An `id` is 1 to 64 letters, digits, `-`, `_` or `.`. `access` is `'biometrics'` (the default) or
@@ -45,7 +47,10 @@ Every error is a `VaultError` with a `code`:
 | `UNAVAILABLE` | No biometrics, or no passcode, set up for what the entry asks |
 | `NOT_FOUND`, `EXISTS` | No entry under that id, or one already |
 | `INVALID_MNEMONIC`, `MNEMONIC_CHECKSUM` | The words to import are not BIP-39 English, or their checksum fails |
-| `UNSUPPORTED` | The linked `@hzblj/nitro-crypto` is older than 0.1.3 (no `bip39-entropy`) |
+| `WEAK_PASSWORD` | A backup password shorter than 8 characters |
+| `WRONG_PASSWORD` | The password does not open the backup, or the backup was changed (the two fail alike) |
+| `INVALID_BACKUP` | The bytes to restore are not a backup this engine reads |
+| `UNSUPPORTED` | The linked `@hzblj/nitro-crypto` is older than 0.1.3 (no `bip39-entropy`), or than 0.1.4 for backups |
 | `INVALID_ARGUMENT`, `FAILED` | A malformed call, or anything else the platform reported |
 
 ## What protects an entry
@@ -60,9 +65,25 @@ Every error is a `VaultError` with a `code`:
 Each is measured from the key itself. Both platforms keep an entry on this device only, never in a backup, and lose it
 when the enrolled biometrics change (an entry opened with the passcode too survives that through the passcode).
 
+## Moving a wallet to another device
+
+An entry stays on its device. Two ways take a wallet elsewhere: its words, and a backup. `backup` opens the entry
+after the system prompt and has the engine seal its entropy under a password (Argon2id at 64 MiB, then
+XChaCha20-Poly1305, nitro-crypto's ADR 0009): 87 to 103 bytes that only the password opens, safe in iCloud Keychain,
+Android Block Store ([`@hzblj/crypto-recovery`](https://github.com/hzblj/crypto-recovery) keeps them there) or a file.
+`restore` opens a backup natively, straight into a new entry under this device's hardware.
+
+```ts
+const backup = await vault.backup('main', {password, prompt: 'Back up your wallet'})
+// on the new device
+await vault.restore('main', backup, {password})
+```
+
+The password is NFC-normalized and needs at least 8 characters; an app should ask for more. It is a string in
+JavaScript on its way in, as typed words are, and crosses as bytes the vault overwrites.
+
 ## Not in this version
 
-Moving a wallet to another device: the words are the way, until encrypted backup and recovery come in a package of their
-own. A BIP-39 passphrase. Android's device-credential fallback before API 30.
+A BIP-39 passphrase. A passkey in place of the backup password. Android's device-credential fallback before API 30.
 
-[Security](https://github.com/hzblj/crypto-vault/blob/main/SECURITY.md) · [ADR 0001](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0001-hardware-sealed-entropy.md)
+[Security](https://github.com/hzblj/crypto-vault/blob/main/SECURITY.md) · [ADR 0001](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0001-hardware-sealed-entropy.md) · [ADR 0002](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0002-password-sealed-backup.md)

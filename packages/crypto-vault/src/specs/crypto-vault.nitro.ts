@@ -4,8 +4,8 @@ import type {HybridObject} from 'react-native-nitro-modules'
 /**
  * The native boundary. Nitrogen generates the C++ spec from this file; `cpp/` implements it over nitro-crypto's
  * native interop and the platform half (`ios/`, `android/`). No call here takes or returns a wallet's entropy:
- * `unlock` hands back a seed the engine made natively, and only `revealMnemonic` returns a secret, the words, for the
- * moment a user writes them down.
+ * `unlock` hands back a seed the engine made natively, `backup` hands back the entropy sealed under a password, and
+ * only `revealMnemonic` returns a secret, the words, for the moment a user writes them down.
  *
  * Errors thrown across it carry a status name (`CV_ERR_CANCELLED`, `NC_ERR_MNEMONIC_CHECKSUM`), never an input.
  */
@@ -33,6 +33,8 @@ export interface CryptoVault extends HybridObject<Native> {
   readonly availableProtection: Protection
   /** Whether the linked nitro-crypto engine has what the vault needs (`bip39-entropy`). */
   readonly supported: boolean
+  /** Whether it seals backups too (`backup-argon2id`, nitro-crypto 0.1.4). */
+  readonly backupSupported: boolean
 
   /** Whether an entry exists under `id`. */
   has(id: string): boolean
@@ -55,6 +57,19 @@ export interface CryptoVault extends HybridObject<Native> {
   unlock(id: string, prompt: string): Promise<VaultSeed>
   /** After the system prompt, the entry's words as UTF-8, for the user to write down. The facade wipes the buffer. */
   revealMnemonic(id: string, prompt: string): Promise<ArrayBuffer>
+  /**
+   * After the system prompt, the entry's entropy sealed under `password` (NFC-normalized UTF-8) by the engine: a
+   * backup that is safe to store anywhere, as the password keeps it. Argon2id takes about half a second, natively. The
+   * bridge copies the password before it returns; the facade overwrites its own.
+   */
+  backup(id: string, password: ArrayBuffer, prompt: string): Promise<ArrayBuffer>
+  /**
+   * The entropy `backup` holds under `password`, sealed under `id`: a wallet restored from a backup, without the
+   * entropy passing through JavaScript. Throws `CV_ERR_EXISTS` before it opens anything, `CV_ERR_INVALID_BACKUP` for
+   * bytes that are no backup this engine reads, and `NC_ERR_VERIFICATION_FAILED` for a wrong password or a changed
+   * backup alike.
+   */
+  restore(id: string, backup: ArrayBuffer, password: ArrayBuffer, access: Access, prompt: string): Promise<void>
   /** Deletes the entry and the key it is sealed under. Idempotent. */
   remove(id: string): void
 }

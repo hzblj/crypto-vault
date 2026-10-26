@@ -1,0 +1,102 @@
+# A wallet through a backup: the published test phrase sealed, backed up under a password, removed, then restored from
+# the backup. A wrong password opens nothing; the right one restores the entry, whose first Ethereum address is the
+# phrase's (0x9858EfFD…EcaEda94): the entropy went from the vault into the engine's seal and back into the hardware.
+#
+# Kara's text fields carry their testID on iOS; on Android they are found under their label.
+appId: ${APP_ID}
+---
+- runFlow: steps/open.yaml
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn: Or passcode
+- scrollUntilVisible:
+    element: Seal these words
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          id: vault-import-words
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          below: Words
+- inputText: abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+- hideKeyboard
+- tapOn:
+    id: vault-import
+- runFlow:
+    file: steps/passcode.yaml
+    env:
+      PROMPT: Protect your wallet
+- extendedWaitUntil:
+    visible: Protected by
+    timeout: 30000
+
+- scrollUntilVisible:
+    element: Back up under this password
+- runFlow:
+    file: steps/password.yaml
+    env:
+      FIELD: vault-backup-password
+      PASSWORD: correct horse battery
+- tapOn:
+    id: vault-backup
+- runFlow:
+    file: steps/passcode.yaml
+    env:
+      PROMPT: Back up your wallet
+- scrollUntilVisible:
+    element: 103 bytes, sealed
+    timeout: 60000
+- takeScreenshot: ${OUT}-01-backed-up
+
+- scrollUntilVisible:
+    element:
+      id: vault-remove
+- tapOn:
+    id: vault-remove
+- scrollUntilVisible:
+    element: Restore the backup
+- runFlow:
+    file: steps/password.yaml
+    env:
+      FIELD: vault-restore-password
+      PASSWORD: wrong horse battery
+- tapOn:
+    id: vault-restore
+- extendedWaitUntil:
+    visible: The password does not open this backup, or the backup was changed.
+    timeout: 60000
+- takeScreenshot: ${OUT}-02-wrong-password
+
+- runFlow:
+    file: steps/password.yaml
+    env:
+      FIELD: vault-restore-password
+      PASSWORD: correct horse battery
+- tapOn:
+    id: vault-restore
+- runFlow:
+    file: steps/passcode.yaml
+    env:
+      PROMPT: Protect your wallet
+- extendedWaitUntil:
+    visible: Protected by
+    timeout: 60000
+- tapOn:
+    id: vault-unlock
+- runFlow:
+    file: steps/passcode.yaml
+    env:
+      PROMPT: Unlock your wallet
+- extendedWaitUntil:
+    visible: SIGNED
+    timeout: 60000
+- scrollUntilVisible:
+    element: 0x9858Ef…aEda94
+- takeScreenshot: ${OUT}-03-restored

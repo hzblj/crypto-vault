@@ -56,6 +56,7 @@ namespace margelo::nitro::cryptovault {
       // Properties
       virtual Protection getAvailableProtection() = 0;
       virtual bool getSupported() = 0;
+      virtual bool getBackupSupported() = 0;
 
     public:
       // Methods
@@ -66,6 +67,8 @@ namespace margelo::nitro::cryptovault {
       virtual std::shared_ptr<Promise<void>> importMnemonic(const std::string& id, const std::shared_ptr<ArrayBuffer>& mnemonic, Access access, const std::string& prompt) = 0;
       virtual std::shared_ptr<Promise<VaultSeed>> unlock(const std::string& id, const std::string& prompt) = 0;
       virtual std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> revealMnemonic(const std::string& id, const std::string& prompt) = 0;
+      virtual std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> backup(const std::string& id, const std::shared_ptr<ArrayBuffer>& password, const std::string& prompt) = 0;
+      virtual std::shared_ptr<Promise<void>> restore(const std::string& id, const std::shared_ptr<ArrayBuffer>& backup, const std::shared_ptr<ArrayBuffer>& password, Access access, const std::string& prompt) = 0;
       virtual void remove(const std::string& id) = 0;
 
     protected:

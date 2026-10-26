@@ -1931,7 +1931,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@hzblj/crypto-vault@workspace:packages/crypto-vault"
   dependencies:
-    "@hzblj/nitro-crypto": "npm:^0.1.3"
+    "@hzblj/nitro-crypto": "npm:^0.1.4"
     "@scure/bip39": "npm:2.4.0"
     "@types/node": "npm:^22.19.0"
     "@types/react": "npm:~19.2.14"
@@ -1942,7 +1942,7 @@ __metadata:
     tsx: "npm:^4.23.15"
     typescript: "npm:~7.0.2"
   peerDependencies:
-    "@hzblj/nitro-crypto": ^0.1.3
+    "@hzblj/nitro-crypto": ^0.1.4
     react: "*"
     react-native: "*"
     react-native-nitro-modules: ^0.37.1
@@ -2110,14 +2110,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@hzblj/nitro-crypto@npm:^0.1.3":
-  version: 0.1.3
-  resolution: "@hzblj/nitro-crypto@npm:0.1.3"
+"@hzblj/nitro-crypto@npm:^0.1.4":
+  version: 0.1.4
+  resolution: "@hzblj/nitro-crypto@npm:0.1.4"
   peerDependencies:
     react: "*"
     react-native: "*"
     react-native-nitro-modules: ^0.37.1
-  checksum: 10c0/df91106ceb26394d34baa9f064d71aa5cb6cdf7cb474ff5d7be3bb0713a32bac50d9188db1a95ef35a0a2640a3f83b50eb1f4cee9a45295169feabf2a6be0e46
+  checksum: 10c0/85b60460ad8bd7efb4d32c233fc2b55aec404144150f505137103a3760e3cb5030e7a26506047eae3843b9635674eee295e9dcb8ec9ccbd0dd882cafd7a9b288
   languageName: node
   linkType: hard
 
@@ -3935,7 +3935,7 @@ __metadata:
     "@hzblj/crypto-ethereum": "npm:^0.2.0"
     "@hzblj/crypto-vault": "workspace:*"
     "@hzblj/kara-ui": "npm:^0.15.3"
-    "@hzblj/nitro-crypto": "npm:^0.1.3"
+    "@hzblj/nitro-crypto": "npm:^0.1.4"
     "@lodev09/react-native-true-sheet": "npm:3.11.18"
     "@types/node": "npm:^22.19.0"
     "@types/react": "npm:~19.2.14"

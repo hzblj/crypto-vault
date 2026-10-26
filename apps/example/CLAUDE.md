@@ -2,13 +2,15 @@
 
 The example app for `@hzblj/crypto-vault`: one wallet in the vault, end to end. Create one or restore one from words,
 see what protects it, unlock it (Face ID or the fingerprint) and sign an Ethereum message with it, show its words,
-remove it. Built from `@hzblj/kara-ui` like every hzblj example. Private; never published.
+back it up under a password, remove it and restore it from the backup. Built from `@hzblj/kara-ui` like every hzblj
+example. Private; never published.
 
 | Path | What it is |
 | --- | --- |
 | `app/` | Expo Router: one stack under a native large title, `index` the vault screen. Route files only re-export a screen from `src/`. |
 | `src/features/vault/` | The vault screen. |
 | `src/core/engine.ts` | The engine (`@hzblj/crypto-ethereum` registered) and the vault over it, once per run; a missing native module is a message, not a crash. |
+| `e2e/` | Maestro: `vault` (create, unlock and sign, words, restore from words) and `backup` (back up, a wrong password, restore), over `steps/`; `run.mjs` runs them. |
 | `src/components/` | `Page`, `Section`, `Rows`, `Notice`, `PhraseGrid`, as the other hzblj examples draw them. |
 | `src/config/theme.ts` | The amber accent, apart from the other examples' emerald and indigo. |
 | `assets/` | The icon (a vault on amber) and the Material Symbols in `icons/`, native assets through kara's plugin. |

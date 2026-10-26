@@ -29,10 +29,13 @@ await account.signMessage({message: 'Hello from the vault'})
 wallet.dispose()
 
 const words = await vault.revealMnemonic('main', {prompt: 'Show your recovery phrase'}) // the one secret that comes out
+
+const backup = await vault.backup('main', {password, prompt: 'Back up your wallet'}) // sealed by the engine, safe anywhere
+await vault.restore('main', backup, {password}) // on another device, straight into its hardware
 ```
 
-**[Documentation](./packages/crypto-vault/README.md)**: install, the API, what protects an entry on each platform, and
-what is not in this version.
+**[Documentation](./packages/crypto-vault/README.md)**: install, the API, what protects an entry on each platform,
+moving a wallet to another device, and what is not in this version.
 
 | | iOS | Android |
 | --- | --- | --- |
@@ -47,7 +50,7 @@ what is not in this version.
 | Path | What lives there |
 | --- | --- |
 | `packages/crypto-vault/` | `@hzblj/crypto-vault`: the spec, the C++ binding, the Swift and Kotlin platform halves, the facade |
-| `apps/example/` | The example: create or restore a wallet, see what protects it, unlock and sign, show its words, remove it |
+| `apps/example/` | The example: create or restore a wallet, see what protects it, unlock and sign, show its words, back it up and restore it, remove it |
 | `scripts/` | The pack check, version sync |
 | `docs/` | [Decisions](./docs/adr) |
 
