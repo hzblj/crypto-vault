@@ -31,6 +31,10 @@ opens it only for the person whose biometrics enrolled that key ([ADR 0001](docs
   natively and hands the engine a seed through nitro-crypto's interop (its ADR 0008); JavaScript receives a wallet,
   never a byte of what is behind it. The words come out on purpose only, through `revealMnemonic`, and the words a user
   types to restore cross as bytes the facade overwrites.
+- **A backup is sealed by the engine, under a password.** `backup` opens an entry after the prompt and has the engine
+  seal its entropy natively (Argon2id, XChaCha20-Poly1305, nitro-crypto's ADR 0009); `restore` opens one natively into
+  a new entry ([ADR 0002](docs/adr/0002-password-sealed-backup.md)). What JavaScript holds is the sealed backup, which
+  is as strong as its password: Argon2id makes each guess cost half a second and 64 MiB, not impossible.
 - **Protection is reported, not assumed.** Each entry says what holds its key (`secure-enclave`, `strongbox`, `tee`
   or `software`), measured from the key. A simulator or an emulator says `software`, and an app should say so too.
 
@@ -42,7 +46,8 @@ opens it only for the person whose biometrics enrolled that key ([ADR 0001](docs
   in nitro-crypto's engine, after the entry is opened.
 - What the platform keeps inside its own calls: the Security framework's and the JVM's buffers of the plaintext they
   return. The vault wipes every buffer it owns, and the words it returns after decoding them.
-- Moving a wallet to another device: an entry is this device's only. Recovery is the words, or an encrypted backup.
+- Where a backup is stored, and who can read it there: the vault hands it over sealed, and the password is the guard.
+- A weak backup password. The vault refuses fewer than 8 characters; the app decides what more to ask for.
 
 ## Known limitations
 

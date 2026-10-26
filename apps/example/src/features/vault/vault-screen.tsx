@@ -32,7 +32,8 @@ const describe = (error: unknown) => {
 
 /**
  * The vault, end to end, on one entry: create or import a wallet, see what protects it, unlock it into the engine and
- * sign with it, show its words, remove it. Every secret stays native but the words, when asked for.
+ * sign with it, show its words, back it up under a password, remove it and restore it from the backup. Every secret
+ * stays native but the words, when asked for; the backup is the engine's seal, held here in memory.
  */
 export const VaultScreen = () => {
   const engine = exampleEngine()
@@ -41,6 +42,8 @@ export const VaultScreen = () => {
   const [words, setWords] = useState('')
   const [phrase, setPhrase] = useState<string[] | null>(null)
   const [signed, setSigned] = useState<Signed | null>(null)
+  const [password, setPassword] = useState('')
+  const [backup, setBackup] = useState<Uint8Array | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -87,8 +90,14 @@ export const VaultScreen = () => {
   const reveal = () =>
     run(async () => setPhrase((await vault.revealMnemonic(ENTRY, {prompt: 'Show your recovery phrase'})).split(' ')))
 
+  const backUp = () => run(async () => setBackup(await vault.backup(ENTRY, {password, prompt: 'Back up your wallet'})))
+
+  const restore = (sealed: Uint8Array) => run(() => vault.restore(ENTRY, sealed, {access, password}))
+
   const remove = () => {
     vault.remove(ENTRY)
+    // The restore field starts empty, so the password typed for the backup goes too.
+    setPassword('')
     setPhrase(null)
     setSigned(null)
     refresh()
@@ -161,6 +170,31 @@ export const VaultScreen = () => {
             </Section>
           ) : null}
 
+          <Section
+            caption="Sealed by the engine under the password (Argon2id, then XChaCha20-Poly1305): safe to store anywhere, and only the password opens it. Kept in memory here; @hzblj/crypto-recovery keeps it in iCloud Keychain or Block Store."
+            title="Backup"
+          >
+            <Island>
+              <VStack spacing="s12" wide>
+                <TextField label="Password" onChangeText={setPassword} secure testID="vault-backup-password" />
+                <Button
+                  disabled={busy || password.length === 0}
+                  label="Back up under this password"
+                  onPress={backUp}
+                  testID="vault-backup"
+                  variant="secondary"
+                />
+              </VStack>
+            </Island>
+            {backup ? (
+              <Island>
+                <Rows>
+                  <LabeledContent label="Backup" value={`${backup.length} bytes, sealed`} />
+                </Rows>
+              </Island>
+            ) : null}
+          </Section>
+
           <Island>
             <Button label="Remove from this device" onPress={remove} testID="vault-remove" variant="destructive" />
           </Island>
@@ -185,6 +219,24 @@ export const VaultScreen = () => {
               />
             </Island>
           </Section>
+          {backup ? (
+            <Section
+              caption={`${backup.length} bytes, opened natively straight into a new entry.`}
+              title="Or restore the backup"
+            >
+              <Island>
+                <VStack spacing="s12" wide>
+                  <TextField label="Password" onChangeText={setPassword} secure testID="vault-restore-password" />
+                  <Button
+                    disabled={busy || password.length === 0}
+                    label="Restore the backup"
+                    onPress={() => restore(backup)}
+                    testID="vault-restore"
+                  />
+                </VStack>
+              </Island>
+            </Section>
+          ) : null}
           <Section title="Or restore one">
             <Island>
               <VStack spacing="s12" wide>

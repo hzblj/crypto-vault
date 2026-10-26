@@ -9,12 +9,14 @@
 
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 namespace margelo::nitro::cryptovault {
 
 namespace interop = margelo::nitro::nitrocrypto::interop;
 using margelo::nitro::nitrocrypto::bridge::SecretBytes;
 using margelo::nitro::nitrocrypto::bridge::StackSecret;
+using margelo::nitro::nitrocrypto::bridge::view;
 using margelo::nitro::nitrocrypto::bridge::wipe;
 
 namespace {
@@ -71,6 +73,13 @@ void checkEngine() {
   }
 }
 
+/// Refuses a backup on an engine that cannot seal one, before anything prompts.
+void checkBackupEngine() {
+  if (!interop::backupSupported()) {
+    throw std::runtime_error("CV_ERR_UNSUPPORTED");
+  }
+}
+
 int32_t toPlatform(Access access) {
   return access == Access::BIOMETRICS_OR_PASSCODE ? CV_ACCESS_BIOMETRICS_OR_PASSCODE : CV_ACCESS_BIOMETRICS;
 }
@@ -108,6 +117,23 @@ void seal(const std::string& id, const uint8_t* entropy, size_t length, Access a
   check(cv_platform_seal(id.data(), id.size(), entropy, length, toPlatform(access), prompt.data(), prompt.size()));
 }
 
+/// A backup opened into `entropy`: its length. The engine reads a header it does not know, and parameters out of its
+/// bounds, as an invalid argument; here that is bytes that are no backup. A wrong password stays the engine's
+/// NC_ERR_VERIFICATION_FAILED.
+size_t openBackup(const std::vector<uint8_t>& backup, const SecretBytes& password,
+                  StackSecret<NC_ENTROPY_MAX_LENGTH>& entropy) {
+  try {
+    return interop::backupOpen(backup.data(), backup.size(), password.chars(), password.size(), entropy.bytes,
+                               NC_ENTROPY_MAX_LENGTH);
+  } catch (const std::runtime_error& error) {
+    if (std::strcmp(error.what(), "NC_ERR_INVALID_ARGUMENT") == 0 ||
+        std::strcmp(error.what(), "NC_ERR_INVALID_LENGTH") == 0) {
+      throw std::runtime_error("CV_ERR_INVALID_BACKUP");
+    }
+    throw;
+  }
+}
+
 } // namespace
 
 Protection HybridCryptoVault::getAvailableProtection() {
@@ -116,6 +142,10 @@ Protection HybridCryptoVault::getAvailableProtection() {
 
 bool HybridCryptoVault::getSupported() {
   return interop::supported();
+}
+
+bool HybridCryptoVault::getBackupSupported() {
+  return interop::backupSupported();
 }
 
 bool HybridCryptoVault::has(const std::string& id) {
@@ -189,6 +219,41 @@ std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> HybridCryptoVault::reveal
                                                         NC_MNEMONIC_MAX_LENGTH);
     // The one secret that goes to JavaScript, on purpose: the facade decodes the words and overwrites this buffer.
     return ArrayBuffer::copy(sentence.bytes, written);
+  });
+}
+
+std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> HybridCryptoVault::backup(
+    const std::string& id, const std::shared_ptr<ArrayBuffer>& password, const std::string& prompt) {
+  checkBackupEngine();
+  // Copied while the call still owns the JS buffer; zeroized when the last copy goes, after the pool thread is done.
+  auto secret = std::make_shared<SecretBytes>(password);
+  return Promise<std::shared_ptr<ArrayBuffer>>::async([id = checkedId(id), secret, prompt]() {
+    StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
+    const size_t length = open(id, prompt, entropy);
+    uint8_t sealed[NC_BACKUP_MAX_LENGTH];
+    const size_t written =
+        interop::backupSeal(entropy.bytes, length, secret->chars(), secret->size(), sealed, NC_BACKUP_MAX_LENGTH);
+    // Sealed, so JavaScript may hold it: what keeps it is the password.
+    return ArrayBuffer::copy(sealed, written);
+  });
+}
+
+std::shared_ptr<Promise<void>> HybridCryptoVault::restore(const std::string& id,
+                                                          const std::shared_ptr<ArrayBuffer>& backup,
+                                                          const std::shared_ptr<ArrayBuffer>& password, Access access,
+                                                          const std::string& prompt) {
+  checkBackupEngine();
+  const auto bytes = view(backup);
+  auto sealed = std::make_shared<std::vector<uint8_t>>(bytes.data, bytes.data + bytes.size);
+  auto secret = std::make_shared<SecretBytes>(password);
+  // Taken already: no half a second of Argon2id, and no prompt, for an entry that cannot be written.
+  if (has(id)) {
+    throw std::runtime_error(statusName(CV_ERR_EXISTS));
+  }
+  return Promise<void>::async([id = checkedId(id), sealed, secret, access, prompt]() {
+    StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
+    const size_t length = openBackup(*sealed, *secret, entropy);
+    seal(id, entropy.bytes, length, access, prompt);
   });
 }
 

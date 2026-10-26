@@ -23,7 +23,9 @@ const crypto = createTestCryptoEngine()
  */
 const fakeHost = () => {
   const entries = new Map<string, {access: Access; entropy: Uint8Array}>()
-  const calls = {imported: [] as ArrayBuffer[], revealed: [] as ArrayBuffer[]}
+  // What the engine's seal would hold, by the backup's bytes: the entropy and the password that opens it.
+  const backups = new Map<string, {entropy: Uint8Array; password: string}>()
+  const calls = {imported: [] as ArrayBuffer[], passwords: [] as ArrayBuffer[], revealed: [] as ArrayBuffer[]}
   let failNext: string | undefined
 
   const fail = () => {
@@ -46,10 +48,20 @@ const fakeHost = () => {
     }
     entries.set(id, {access, entropy})
   }
+  const hex = (bytes: ArrayBuffer) => Buffer.from(bytes).toString('hex')
 
   const host = {
     access: (id: string) => entry(id).access,
     availableProtection: 'secure-enclave' as Protection,
+    backup: async (id: string, password: ArrayBuffer) => {
+      calls.passwords.push(password)
+      fail()
+      const {entropy} = entry(id)
+      const sealed = globalThis.crypto.getRandomValues(new Uint8Array(55 + entropy.length + 16)).buffer as ArrayBuffer
+      backups.set(hex(sealed), {entropy: entropy.slice(), password: hex(password)})
+      return sealed
+    },
+    backupSupported: true,
     create: async (id: string, words: number, access: Access) => {
       fail()
       seal(id, globalThis.crypto.getRandomValues(new Uint8Array((words * 4) / 3)), access)
@@ -70,6 +82,20 @@ const fakeHost = () => {
     protection: (id: string) => (entry(id), 'secure-enclave' as Protection),
     remove: (id: string) => {
       entries.delete(id)
+    },
+    restore: async (id: string, backup: ArrayBuffer, password: ArrayBuffer, access: Access) => {
+      calls.passwords.push(password)
+      if (entries.has(id)) {
+        throw new Error('CryptoVault.restore(...): CV_ERR_EXISTS')
+      }
+      const found = backups.get(hex(backup))
+      if (!found) {
+        throw new Error('CryptoVault.restore(...): CV_ERR_INVALID_BACKUP')
+      }
+      if (found.password !== hex(password)) {
+        throw new Error('CryptoVault.restore(...): NC_ERR_VERIFICATION_FAILED')
+      }
+      seal(id, found.entropy.slice(), access)
     },
     revealMnemonic: async (id: string) => {
       fail()
@@ -169,6 +195,60 @@ describe('the vault', () => {
       () => vault.protection('missing'),
       error => error instanceof VaultError && error.code === 'NOT_FOUND'
     )
+  })
+
+  test('backs a wallet up under a password and restores it into a new entry', async () => {
+    const {calls, host} = fakeHost()
+    const vault = createVaultOn(host, crypto)
+    await vault.importMnemonic('main', ABANDON)
+    assert.equal(vault.backupSupported, true)
+
+    const backup = await vault.backup('main', {password: 'correct horse', prompt: 'Back up your wallet'})
+    assert.ok(backup instanceof Uint8Array)
+    assert.equal(backup.length, 55 + 16 + 16)
+
+    vault.remove('main')
+    await vault.restore('main', backup, {access: 'biometrics-or-passcode', password: 'correct horse'})
+    assert.equal(vault.access('main'), 'biometrics-or-passcode')
+    const wallet = await vault.unlock('main', {prompt: 'Unlock'})
+    assert.equal(wallet.fingerprint, 0x73c5da0a)
+    wallet.dispose()
+
+    // Both passwords crossed as bytes this package overwrote once the bridge had them.
+    assert.equal(calls.passwords.length, 2)
+    for (const password of calls.passwords) {
+      assert.ok(new Uint8Array(password).every(byte => byte === 0))
+    }
+  })
+
+  test('normalizes passwords to NFC and counts characters, not bytes', async () => {
+    const {host} = fakeHost()
+    const vault = createVaultOn(host, crypto)
+    await vault.create('main')
+
+    // Eight characters, eleven bytes: long enough. Composed and decomposed, the same password.
+    const backup = await vault.backup('main', {password: 'žluťoučk', prompt: 'Back up'})
+    const decomposed = 'z\u030Clut\u030Couc\u030Ck'
+    assert.notEqual(decomposed, 'žluťoučk')
+    await vault.restore('copy', backup, {password: decomposed})
+    assert.equal(vault.has('copy'), true)
+
+    await rejectsCode(() => vault.backup('main', {password: 'seven 7', prompt: 'Back up'}), 'WEAK_PASSWORD')
+    await rejectsCode(() => vault.backup('main', {password: undefined as never, prompt: 'Back up'}), 'WEAK_PASSWORD')
+    await rejectsCode(() => vault.backup('main', {password: 'correct horse', prompt: ''}), 'INVALID_ARGUMENT')
+  })
+
+  test('maps what restoring can go wrong with', async () => {
+    const {host} = fakeHost()
+    const vault = createVaultOn(host, crypto)
+    await vault.create('main')
+    const backup = await vault.backup('main', {password: 'correct horse', prompt: 'Back up'})
+
+    await rejectsCode(() => vault.restore('main', backup, {password: 'correct horse'}), 'EXISTS')
+    await rejectsCode(() => vault.restore('other', backup, {password: 'battery staple'}), 'WRONG_PASSWORD')
+    await rejectsCode(() => vault.restore('other', backup.slice(1), {password: 'correct horse'}), 'INVALID_BACKUP')
+    await rejectsCode(() => vault.restore('other', 'backup' as never, {password: 'correct horse'}), 'INVALID_BACKUP')
+    assert.equal(vault.has('other'), false)
   })
 
   test('VERSION matches package.json', () => {

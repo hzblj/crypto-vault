@@ -1,6 +1,6 @@
 /**
  * The vault's errors. Native code throws status names (`CV_ERR_CANCELLED`, and the engine's `NC_ERR_*` from
- * importing words) and they are mapped here; no message ever carries an input, let alone a secret.
+ * importing words and opening backups) and they are mapped here; no message ever carries an input, let alone a secret.
  */
 
 export const VAULT_ERROR_CODES = [
@@ -8,12 +8,15 @@ export const VAULT_ERROR_CODES = [
   'EXISTS',
   'FAILED',
   'INVALID_ARGUMENT',
+  'INVALID_BACKUP',
   'INVALID_MNEMONIC',
   'INVALIDATED',
   'MNEMONIC_CHECKSUM',
   'NOT_FOUND',
   'UNAVAILABLE',
   'UNSUPPORTED',
+  'WEAK_PASSWORD',
+  'WRONG_PASSWORD',
 ] as const
 
 export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[number]
@@ -23,12 +26,16 @@ const DEFAULT_MESSAGES: Record<VaultErrorCode, string> = {
   EXISTS: 'An entry is already sealed under this id.',
   FAILED: 'The platform could not complete the operation.',
   INVALID_ARGUMENT: 'An argument is not one the vault takes.',
+  INVALID_BACKUP: 'These bytes are not a backup this engine reads.',
   INVALID_MNEMONIC: 'The mnemonic is not BIP-39 English.',
   INVALIDATED: 'The enrolled biometrics changed, and the entry went with its key. Restore it from its words.',
   MNEMONIC_CHECKSUM: 'The mnemonic checksum does not match.',
   NOT_FOUND: 'No entry is sealed under this id.',
   UNAVAILABLE: 'This device has no biometrics or passcode set up for what the entry asks.',
-  UNSUPPORTED: 'The linked @hzblj/nitro-crypto engine lacks the bip39-entropy capability.',
+  UNSUPPORTED:
+    'The linked @hzblj/nitro-crypto engine lacks a capability the vault needs (bip39-entropy, or backup-argon2id for backups).',
+  WEAK_PASSWORD: 'A backup password needs at least 8 characters.',
+  WRONG_PASSWORD: 'The password does not open this backup, or the backup was changed.',
 }
 
 export class VaultError extends Error {
@@ -48,6 +55,7 @@ const ENGINE_STATUSES: Partial<Record<string, VaultErrorCode>> = {
   NC_ERR_INVALID_LENGTH: 'INVALID_ARGUMENT',
   NC_ERR_INVALID_MNEMONIC: 'INVALID_MNEMONIC',
   NC_ERR_MNEMONIC_CHECKSUM: 'MNEMONIC_CHECKSUM',
+  NC_ERR_VERIFICATION_FAILED: 'WRONG_PASSWORD',
 }
 
 const STATUS_PATTERN = /(?:CV|NC)_ERR_[A-Z_]+/
