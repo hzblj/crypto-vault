@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The vault package's TypeScript source, as Metro runs it (metro.config.js maps its `source` export), so the
+    // example type-checks against it without a build.
+    "paths": {
+      "@hzblj/crypto-vault": ["../../packages/crypto-vault/src/index.ts"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts", "native-icons.d.ts"],
+  "exclude": ["test"]
+}

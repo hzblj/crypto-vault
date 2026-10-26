@@ -1,0 +1,96 @@
+# One wallet through the vault: created (fresh entropy, sealed natively), unlocked into the engine and signing an
+# Ethereum message that verifies, its words shown, removed. Then the published test phrase restored, whose first
+# Ethereum address is known (0x9858EfFD…EcaEda94): the entropy the vault seals and opens is the phrase's.
+#
+# iOS: the runner presents a face to the simulator while the flow runs. Android: the entries open with the device
+# credential too, and steps/passcode.yaml types the emulator's PIN.
+appId: ${APP_ID}
+---
+- runFlow: steps/open.yaml
+- takeScreenshot: ${OUT}-01-empty
+
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn: Or passcode
+- tapOn:
+    id: vault-create
+- runFlow:
+    file: steps/passcode.yaml
+    env:
+      PROMPT: Protect your wallet
+- extendedWaitUntil:
+    visible: Protected by
+    timeout: 30000
+- takeScreenshot: ${OUT}-02-sealed
+
+- tapOn:
+    id: vault-unlock
+- runFlow:
+    file: steps/passcode.yaml
+    env:
+      PROMPT: Unlock your wallet
+- extendedWaitUntil:
+    visible: SIGNED
+    timeout: 60000
+- scrollUntilVisible:
+    element: Signature verifies
+- assertVisible: 'Yes'
+- takeScreenshot: ${OUT}-03-signed
+
+- tapOn:
+    id: vault-reveal
+- runFlow:
+    file: steps/passcode.yaml
+    env:
+      PROMPT: Show your recovery phrase
+- scrollUntilVisible:
+    element:
+      id: vault-words
+    timeout: 60000
+- takeScreenshot: ${OUT}-04-words
+
+- scrollUntilVisible:
+    element:
+      id: vault-remove
+- tapOn:
+    id: vault-remove
+# Kara's text field carries its testID on iOS; on Android it is found under its label.
+- scrollUntilVisible:
+    element: Seal these words
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          id: vault-import-words
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          below: Words
+- inputText: abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+- hideKeyboard
+- tapOn:
+    id: vault-import
+- runFlow:
+    file: steps/passcode.yaml
+    env:
+      PROMPT: Protect your wallet
+- extendedWaitUntil:
+    visible: Protected by
+    timeout: 30000
+- tapOn:
+    id: vault-unlock
+- runFlow:
+    file: steps/passcode.yaml
+    env:
+      PROMPT: Unlock your wallet
+- extendedWaitUntil:
+    visible: SIGNED
+    timeout: 60000
+- scrollUntilVisible:
+    element: 0x9858Ef…aEda94
+- takeScreenshot: ${OUT}-05-restored

@@ -1,0 +1,38 @@
+# The shared prologue: the app on its vault screen, with no entry left by an earlier run (the Keychain and the
+# Keystore outlive an app's data). A development build opens straight on the running Metro server; a release build
+# carries its bundle and just launches.
+appId: ${APP_ID}
+---
+- stopApp
+- runFlow:
+    when:
+      true: ${BUILD == 'release'}
+    commands:
+      - launchApp
+- runFlow:
+    when:
+      true: ${BUILD != 'release'}
+    commands:
+      - openLink: ${DEV_SERVER_LINK}
+      # Once per install, iOS asks whether the link may open the app, in the simulator's language.
+      - tapOn:
+          text: Open|Otevřít
+          optional: true
+- extendedWaitUntil:
+    visible:
+      id: vault
+    timeout: 180000
+- runFlow:
+    when:
+      visible:
+        id: vault-unlock
+    commands:
+      - scrollUntilVisible:
+          element:
+            id: vault-remove
+      - tapOn:
+          id: vault-remove
+      - scrollUntilVisible:
+          element:
+            id: vault-create
+          direction: UP

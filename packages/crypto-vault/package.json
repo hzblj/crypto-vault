@@ -1,0 +1,94 @@
+{
+  "name": "@hzblj/crypto-vault",
+  "version": "0.0.0",
+  "description": "A wallet's BIP-39 entropy sealed by the Secure Enclave or StrongBox for React Native and Expo, opened after Face ID or the fingerprint, and handed to the nitro-crypto engine natively: no word and no byte of it passes through JavaScript.",
+  "author": "Jan Blazej",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hzblj/crypto-vault.git",
+    "directory": "packages/crypto-vault"
+  },
+  "bugs": {
+    "url": "https://github.com/hzblj/crypto-vault/issues"
+  },
+  "homepage": "https://github.com/hzblj/crypto-vault#readme",
+  "keywords": [
+    "biometrics",
+    "bip39",
+    "crypto",
+    "expo",
+    "face-id",
+    "keychain",
+    "keystore",
+    "nitro",
+    "react-native",
+    "secure-enclave",
+    "strongbox",
+    "vault",
+    "wallet"
+  ],
+  "main": "./build/index.js",
+  "types": "./build/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "android/build.gradle",
+    "android/CMakeLists.txt",
+    "android/gradle.properties",
+    "android/src/main/**",
+    "build",
+    "cpp",
+    "ios",
+    "nitro.json",
+    "nitrogen/generated/**",
+    "CryptoVault.podspec"
+  ],
+  "scripts": {
+    "build": "rm -rf build && tsc -p ./tsconfig.build.json",
+    "clean": "rm -rf build",
+    "codegen": "nitrogen --logLevel=warning",
+    "prepack": "yarn run -T turbo run build --filter=$npm_package_name...",
+    "lint": "yarn run -T concurrently \"yarn biome:check\" \"yarn tsc:check\"",
+    "lint:fix": "yarn run -T biome check --write .",
+    "biome:check": "yarn run -T biome check .",
+    "tsc:check": "tsc -p ./tsconfig.json",
+    "test": "node --conditions=source --import tsx --test 'test/**/*.test.ts'"
+  },
+  "peerDependencies": {
+    "@hzblj/nitro-crypto": "^0.1.3",
+    "react": "*",
+    "react-native": "*",
+    "react-native-nitro-modules": "^0.37.1"
+  },
+  "devDependencies": {
+    "@hzblj/nitro-crypto": "^0.1.3",
+    "@scure/bip39": "2.4.0",
+    "@types/node": "^22.19.0",
+    "@types/react": "~19.2.14",
+    "nitrogen": "0.37.1",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-nitro-modules": "0.37.1",
+    "tsx": "^4.23.15",
+    "typescript": "~7.0.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./build/index.d.ts",
+        "default": "./build/index.js"
+      },
+      "./package.json": "./package.json"
+    },
+    "provenance": true
+  }
+}

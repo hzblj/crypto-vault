@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 27.1.12297006
+
+jobs:
+  check:
+    name: Lint, typecheck, test, pack check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Biome
+        run: yarn biome:check
+
+      - name: Typecheck
+        run: yarn typecheck
+
+      # The facade over a stand-in host, on @hzblj/nitro-crypto's engine
+      # compiled to WebAssembly (its `testing` entry). The native halves are built by the jobs below.
+      - name: Test
+        run: yarn test
+
+      - name: Pack check
+        run: yarn pack:check
+
+  android:
+    name: Android build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install the NDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;${NDK_VERSION}" > /dev/null
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Prebuild the example
+        run: yarn workspace crypto-vault-example expo prebuild --platform android --no-install
+
+      - name: Build the example
+        working-directory: apps/example/android
+        run: ./gradlew :app:assembleDebug --console=plain
+
+  ios:
+    name: iOS build
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Prebuild the example
+        run: yarn workspace crypto-vault-example expo prebuild --platform ios
+
+      - name: Build the example for the simulator
+        working-directory: apps/example/ios
+        run: >
+          xcodebuild -workspace VaultExample.xcworkspace -scheme VaultExample -configuration Debug
+          -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build

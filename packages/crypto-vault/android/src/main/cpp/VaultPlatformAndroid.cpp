@@ -1,0 +1,135 @@
+//
+// VaultPlatformAndroid.cpp
+// The C functions of VaultPlatform.h over JNI: each calls the static method of the same name on VaultKeystore (Kotlin),
+// from whatever pool thread the bridge runs on, with the app's class loader. The secret crosses into the JVM and back
+// as byte arrays, which this side overwrites once the call returns.
+//
+
+#include "VaultPlatform.h"
+
+#include <fbjni/fbjni.h>
+
+#include <string>
+#include <vector>
+
+namespace {
+
+using namespace facebook;
+
+struct JVaultKeystore : jni::JavaClass<JVaultKeystore> {
+  static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/cryptovault/VaultKeystore;";
+};
+
+std::string text(const char* pointer, size_t length) {
+  return pointer == nullptr ? std::string() : std::string(pointer, length);
+}
+
+/// Runs `call` on the JVM with the app's class loader (a pool thread has only the system's), mapping anything the
+/// JVM throws, which VaultKeystore itself never should, to CV_ERR_FAILED.
+template <typename Call>
+int32_t onJvm(Call&& call) {
+  int32_t status = CV_ERR_FAILED;
+  jni::ThreadScope::WithClassLoader([&] {
+    try {
+      status = call();
+    } catch (...) {
+      status = CV_ERR_FAILED;
+    }
+  });
+  return status;
+}
+
+/// Overwrites a byte array the JVM holds: one this side made, or one a call returned.
+template <typename Array>
+void wipe(Array& array) {
+  const size_t size = array->size();
+  if (size > 0) {
+    const std::vector<jbyte> zeros(size, 0);
+    array->setRegion(0, size, zeros.data());
+  }
+}
+
+} // namespace
+
+extern "C" int32_t cv_platform_available_protection(void) {
+  return onJvm([] {
+    static const auto method = JVaultKeystore::javaClassStatic()->getStaticMethod<jint()>("availableProtection");
+    return static_cast<int32_t>(method(JVaultKeystore::javaClassStatic()));
+  });
+}
+
+extern "C" cv_result cv_platform_seal(const char* id, size_t id_len, const uint8_t* secret, size_t secret_len,
+                                      int32_t access, const char* prompt, size_t prompt_len) {
+  if (id == nullptr || secret == nullptr || secret_len == 0) {
+    return CV_ERR_INVALID_ARGUMENT;
+  }
+  return onJvm([&] {
+    static const auto method = JVaultKeystore::javaClassStatic()
+                                   ->getStaticMethod<jint(jstring, jni::JArrayByte::javaobject, jint, jstring)>("seal");
+    auto bytes = jni::JArrayByte::newArray(secret_len);
+    bytes->setRegion(0, secret_len, reinterpret_cast<const jbyte*>(secret));
+    const jint status = method(JVaultKeystore::javaClassStatic(), jni::make_jstring(text(id, id_len)).get(),
+                               bytes.get(), access, jni::make_jstring(text(prompt, prompt_len)).get());
+    wipe(bytes);
+    return static_cast<int32_t>(status);
+  });
+}
+
+extern "C" cv_result cv_platform_open(const char* id, size_t id_len, const char* prompt, size_t prompt_len,
+                                      uint8_t* out, size_t out_len, size_t* written) {
+  if (id == nullptr || out == nullptr || written == nullptr) {
+    return CV_ERR_INVALID_ARGUMENT;
+  }
+  return onJvm([&] {
+    static const auto method =
+        JVaultKeystore::javaClassStatic()->getStaticMethod<jni::JArrayByte::javaobject(jstring, jstring)>("open");
+    auto result = method(JVaultKeystore::javaClassStatic(), jni::make_jstring(text(id, id_len)).get(),
+                         jni::make_jstring(text(prompt, prompt_len)).get());
+    const size_t size = result->size();
+    if (size == 0) {
+      return static_cast<int32_t>(CV_ERR_FAILED);
+    }
+    jbyte status = 0;
+    result->getRegion(0, 1, &status);
+    if (status == CV_OK) {
+      const size_t length = size - 1;
+      if (length > out_len) {
+        status = CV_ERR_BUFFER_TOO_SMALL;
+      } else {
+        result->getRegion(1, length, reinterpret_cast<jbyte*>(out));
+        *written = length;
+      }
+    }
+    wipe(result);
+    return static_cast<int32_t>(status);
+  });
+}
+
+extern "C" cv_result cv_platform_info(const char* id, size_t id_len, int32_t* protection, int32_t* access) {
+  if (id == nullptr || protection == nullptr || access == nullptr) {
+    return CV_ERR_INVALID_ARGUMENT;
+  }
+  return onJvm([&] {
+    static const auto method =
+        JVaultKeystore::javaClassStatic()->getStaticMethod<jni::JArrayInt::javaobject(jstring)>("info");
+    auto result = method(JVaultKeystore::javaClassStatic(), jni::make_jstring(text(id, id_len)).get());
+    jint values[3] = {CV_ERR_FAILED, 0, 0};
+    if (result->size() == 3) {
+      result->getRegion(0, 3, values);
+    }
+    *protection = values[1];
+    *access = values[2];
+    return static_cast<int32_t>(values[0]);
+  });
+}
+
+extern "C" cv_result cv_platform_remove(const char* id, size_t id_len) {
+  if (id == nullptr) {
+    return CV_ERR_INVALID_ARGUMENT;
+  }
+  return onJvm([&] {
+    static const auto method = JVaultKeystore::javaClassStatic()->getStaticMethod<jint(jstring)>("remove");
+    return static_cast<int32_t>(
+        method(JVaultKeystore::javaClassStatic(), jni::make_jstring(text(id, id_len)).get()));
+  });
+}

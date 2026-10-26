@@ -1,0 +1,63 @@
+# crypto-vault
+
+[![npm](https://img.shields.io/npm/v/@hzblj/crypto-vault.svg)](https://www.npmjs.com/package/@hzblj/crypto-vault)
+[![license](https://img.shields.io/npm/l/@hzblj/crypto-vault.svg)](./LICENSE)
+
+A wallet kept by the phone's security hardware, for React Native and Expo. Its BIP-39 entropy is sealed under a key
+the Secure Enclave or StrongBox holds, opened only after Face ID or the fingerprint, and handed to the
+[`@hzblj/nitro-crypto`](https://github.com/hzblj/nitro-crypto) engine natively: JavaScript gets a wallet that signs, and
+never a word or byte of what is behind it.
+
+```sh
+npx expo install @hzblj/crypto-vault @hzblj/nitro-crypto react-native-nitro-modules
+```
+
+```ts
+import {ethereumAdapter} from '@hzblj/crypto-ethereum'
+import {createVault} from '@hzblj/crypto-vault'
+import {createCryptoEngine} from '@hzblj/nitro-crypto'
+
+const crypto = createCryptoEngine({adapters: [ethereumAdapter()]})
+const vault = createVault(crypto)
+
+await vault.create('main') // fresh entropy, sealed natively before anything else sees it
+vault.protection('main') // 'secure-enclave' on an iPhone, 'strongbox' or 'tee' on Android
+
+const wallet = await vault.unlock('main', {prompt: 'Unlock your wallet'}) // Face ID, then a wallet in the engine
+const account = await wallet.deriveAccount({chain: 'ethereum', index: 0})
+await account.signMessage({message: 'Hello from the vault'})
+wallet.dispose()
+
+const words = await vault.revealMnemonic('main', {prompt: 'Show your recovery phrase'}) // the one secret that comes out
+```
+
+**[Documentation](./packages/crypto-vault/README.md)**: install, the API, what protects an entry on each platform, and
+what is not in this version.
+
+| | iOS | Android |
+| --- | --- | --- |
+| Key | P-256 in the Secure Enclave | AES-256-GCM in StrongBox, or the trusted environment |
+| Sealing | ECIES to the key's public half | AES-GCM, one BiometricPrompt |
+| Opens with | Face ID or Touch ID, or the passcode too | Strong biometrics, or the device credential too (API 30+) |
+| New biometrics | The key is deleted: the entry is lost | The key is invalidated: the entry is lost |
+| Stored | Keychain, this device only, with a passcode | The no-backup directory |
+
+## This repository
+
+| Path | What lives there |
+| --- | --- |
+| `packages/crypto-vault/` | `@hzblj/crypto-vault`: the spec, the C++ binding, the Swift and Kotlin platform halves, the facade |
+| `apps/example/` | The example: create or restore a wallet, see what protects it, unlock and sign, show its words, remove it |
+| `scripts/` | The pack check, version sync |
+| `docs/` | [Decisions](./docs/adr) |
+
+```sh
+yarn                 # install
+yarn test            # the facade's tests, on nitro-crypto's engine compiled to WebAssembly
+yarn typecheck       # tsc
+yarn lint            # Biome
+yarn pack:check      # what npm receives, and a consumer type-check
+yarn ios             # the example on the iOS simulator (yarn android for Android)
+```
+
+[Security](./SECURITY.md) · [MIT](./LICENSE)

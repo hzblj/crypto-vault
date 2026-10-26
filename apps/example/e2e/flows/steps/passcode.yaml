@@ -1,0 +1,13 @@
+# Android's prompt for an entry that opens with the device credential: the emulator's PIN, 1111. iOS needs nothing
+# here: the runner presents a face to the simulator every two seconds.
+appId: ${APP_ID}
+---
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - extendedWaitUntil:
+          visible: ${PROMPT}
+          timeout: 30000
+      - inputText: '1111'
+      - pressKey: Enter
