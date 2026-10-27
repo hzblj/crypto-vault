@@ -1,6 +1,6 @@
 {
   "name": "@hzblj/crypto-vault",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "A wallet's BIP-39 entropy sealed by the Secure Enclave or StrongBox for React Native and Expo, opened after Face ID or the fingerprint, and handed to the nitro-crypto engine natively: no word and no byte of it passes through JavaScript.",
   "author": "Jan Blazej",
   "license": "MIT",
