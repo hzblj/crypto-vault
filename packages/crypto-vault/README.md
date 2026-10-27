@@ -7,6 +7,11 @@ A wallet's BIP-39 entropy sealed by the Secure Enclave or StrongBox, for React N
 after the system's biometric prompt, straight into the [`@hzblj/nitro-crypto`](https://github.com/hzblj/nitro-crypto)
 engine: the seed is made natively, and JavaScript receives a wallet, never the entropy or the words behind it.
 
+<p>
+  <img alt="The example on the iOS simulator: a wallet in the vault, opened with Face ID. The simulator has no Secure Enclave, so it says Software only" height="560" src="https://raw.githubusercontent.com/hzblj/crypto-vault/main/media/ios-vault.png" />
+  <img alt="The wallet unlocked into the engine, its signature verified, and backed up under a password: 87 bytes, sealed" height="560" src="https://raw.githubusercontent.com/hzblj/crypto-vault/main/media/ios-backup.png" />
+</p>
+
 ```sh
 npx expo install @hzblj/crypto-vault @hzblj/nitro-crypto react-native-nitro-modules
 ```
