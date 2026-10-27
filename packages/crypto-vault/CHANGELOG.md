@@ -1,5 +1,11 @@
 # @hzblj/crypto-vault
 
+## 0.2.1
+
+### Patch Changes
+
+- [`b1c5446`](https://github.com/hzblj/crypto-vault/commit/b1c5446db28f4c4c6c0a82448eadd63f073dc4fa) Thanks [@hzblj](https://github.com/hzblj)! - The README shows the example app on iOS and Android.
+
 ## 0.2.0
 
 ### Minor Changes
