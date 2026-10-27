@@ -1,6 +1,7 @@
 /**
  * The vault's errors. Native code throws status names (`CV_ERR_CANCELLED`, and the engine's `NC_ERR_*` from
  * importing words and opening backups) and they are mapped here; no message ever carries an input, let alone a secret.
+ * The passkey sheet's errors are the vault's too: `CANCELLED` when the person dismisses it.
  */
 
 export const VAULT_ERROR_CODES = [
@@ -12,10 +13,16 @@ export const VAULT_ERROR_CODES = [
   'INVALID_MNEMONIC',
   'INVALIDATED',
   'MNEMONIC_CHECKSUM',
+  'NEEDS_PASSKEY',
+  'NEEDS_PASSWORD',
   'NOT_FOUND',
+  'PASSKEY_NOT_FOUND',
+  'PASSKEY_UNSUPPORTED',
   'UNAVAILABLE',
   'UNSUPPORTED',
   'WEAK_PASSWORD',
+  'WRONG_PASSKEY',
+  'WRONG_PASSPHRASE',
   'WRONG_PASSWORD',
 ] as const
 
@@ -30,11 +37,18 @@ const DEFAULT_MESSAGES: Record<VaultErrorCode, string> = {
   INVALID_MNEMONIC: 'The mnemonic is not BIP-39 English.',
   INVALIDATED: 'The enrolled biometrics changed, and the entry went with its key. Restore it from its words.',
   MNEMONIC_CHECKSUM: 'The mnemonic checksum does not match.',
+  NEEDS_PASSKEY: 'This backup is sealed under a passkey: the passkey opens it, not a password.',
+  NEEDS_PASSWORD: 'This backup is sealed under a password: the password opens it, not a passkey.',
   NOT_FOUND: 'No entry is sealed under this id.',
+  PASSKEY_NOT_FOUND: 'No passkey for this app is on this device.',
+  PASSKEY_UNSUPPORTED:
+    'Passkeys cannot seal a backup here: the system is older than iOS 18 or Android 9, the passkey gives no PRF output, or it is on another device.',
   UNAVAILABLE: 'This device has no biometrics or passcode set up for what the entry asks.',
   UNSUPPORTED:
-    'The linked @hzblj/nitro-crypto engine lacks a capability the vault needs (bip39-entropy, or backup-argon2id for backups).',
+    'The linked @hzblj/nitro-crypto engine lacks a capability the vault needs (bip39-entropy, backup-argon2id for backups, or backup-hkdf-sha256 for passkey backups).',
   WEAK_PASSWORD: 'A backup password needs at least 8 characters.',
+  WRONG_PASSKEY: 'This passkey does not open the backup, or the backup was changed.',
+  WRONG_PASSPHRASE: 'This is not the passphrase the wallet was given: it would open a different wallet.',
   WRONG_PASSWORD: 'The password does not open this backup, or the backup was changed.',
 }
 

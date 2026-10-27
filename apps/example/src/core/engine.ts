@@ -1,6 +1,7 @@
 import {ethereumAdapter} from '@hzblj/crypto-ethereum'
 import {createVault, isVaultError, type Vault, VaultError} from '@hzblj/crypto-vault'
 import {CryptoError, createCryptoEngine, isCryptoError} from '@hzblj/nitro-crypto'
+import Constants from 'expo-constants'
 
 const createEngine = () => createCryptoEngine({adapters: [ethereumAdapter()]})
 
@@ -12,12 +13,15 @@ type Engine =
 
 let engine: Engine | undefined
 
+/** The domain passkey backups belong to, `VAULT_PASSKEY_DOMAIN` at build time (app.config.ts), or none. */
+export const PASSKEY_DOMAIN: string | undefined = Constants.expoConfig?.extra?.passkeyDomain ?? undefined
+
 /** The engine and the vault over it, once per run: a missing native module is a message on screen, not a crash. */
 export const exampleEngine = (): Engine => {
   if (!engine) {
     try {
       const crypto = createEngine()
-      engine = {crypto, vault: createVault(crypto)}
+      engine = {crypto, vault: createVault(crypto, {relyingParty: PASSKEY_DOMAIN})}
     } catch (error) {
       engine = {
         error:

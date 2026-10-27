@@ -5,6 +5,11 @@ const NAME = 'Vault Example'
 const BUNDLE_ID = 'com.hzblj.cryptovault.example'
 // The middle of the icon's amber: what the Android icon's vault sits on.
 const ICON_BACKGROUND = '#b45309'
+// The domain passkey backups belong to (their relying party), from the environment: one whose
+// /.well-known/apple-app-site-association names `<team id>.com.hzblj.cryptovault.example` under `webcredentials`, and
+// whose /.well-known/assetlinks.json names the package with its signing certificate's SHA-256. Without one, the example
+// offers no passkey backup.
+const PASSKEY_DOMAIN = process.env.VAULT_PASSKEY_DOMAIN || undefined
 
 export default {
   android: {
@@ -17,8 +22,13 @@ export default {
   experiments: {
     typedRoutes: true,
   },
+  extra: {
+    passkeyDomain: PASSKEY_DOMAIN ?? null,
+  },
   icon: './assets/icon.png',
   ios: {
+    // A passkey of the relying party works in an app the domain names, and that names the domain back.
+    ...(PASSKEY_DOMAIN ? {associatedDomains: [`webcredentials:${PASSKEY_DOMAIN}`]} : {}),
     bundleIdentifier: BUNDLE_ID,
     infoPlist: {
       // The Secure Enclave key of every entry opens only after Face ID: iOS shows this the first time it asks.

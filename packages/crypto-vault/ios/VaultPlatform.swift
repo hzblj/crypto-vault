@@ -14,16 +14,19 @@ import Foundation
 import LocalAuthentication
 import Security
 
-// The values of VaultPlatform.h, which Swift cannot import from C++ sources.
-private let statusOk: Int32 = 0
-private let statusInvalidArgument: Int32 = 1
-private let statusNotFound: Int32 = 2
-private let statusExists: Int32 = 3
-private let statusCancelled: Int32 = 4
-private let statusInvalidated: Int32 = 5
-private let statusUnavailable: Int32 = 6
-private let statusBufferTooSmall: Int32 = 7
-private let statusFailed: Int32 = 8
+// The values of VaultPlatform.h, which Swift cannot import from C++ sources. Internal: VaultPasskey.swift says them
+// too.
+let statusOk: Int32 = 0
+let statusInvalidArgument: Int32 = 1
+let statusNotFound: Int32 = 2
+let statusExists: Int32 = 3
+let statusCancelled: Int32 = 4
+let statusInvalidated: Int32 = 5
+let statusUnavailable: Int32 = 6
+let statusBufferTooSmall: Int32 = 7
+let statusFailed: Int32 = 8
+let statusPasskeyUnsupported: Int32 = 9
+let statusPasskeyNotFound: Int32 = 10
 
 private let protectionSoftware: Int32 = 0
 private let protectionSecureEnclave: Int32 = 3
@@ -51,7 +54,8 @@ private var hasSecureEnclave: Bool {
   !onSimulator && SecureEnclave.isAvailable
 }
 
-private func text(_ pointer: UnsafePointer<CChar>?, _ length: Int) -> String? {
+/// A UTF-8 argument of the C interface as a string: nil for a null pointer with a length.
+func text(_ pointer: UnsafePointer<CChar>?, _ length: Int) -> String? {
   if length == 0 {
     return ""
   }
@@ -263,6 +267,59 @@ public func cvPlatformOpen(
   return statusOk
 }
 
+/// The entry under `id` sealed anew to its own key's public half, which asks no one: the Keychain item's data is
+/// replaced in one update, its metadata kept, so the entry is the old one or the new one, never neither.
+@_cdecl("cv_platform_reseal")
+public func cvPlatformReseal(
+  _ id: UnsafePointer<CChar>?, _ idLength: Int,
+  _ secret: UnsafePointer<UInt8>?, _ secretLength: Int,
+  _: UnsafePointer<CChar>?, _: Int
+) -> Int32 {
+  guard let id = text(id, idLength), !id.isEmpty, let secret, secretLength > 0 else {
+    return statusInvalidArgument
+  }
+  guard readEntry(id) != nil else {
+    return statusNotFound
+  }
+
+  // A reference to the key, which needs no one: using the private half would, and sealing uses the public half only.
+  let context = LAContext()
+  context.interactionNotAllowed = true
+  var query = keyQuery(id)
+  query[kSecReturnRef as String] = true
+  query[kSecUseAuthenticationContext as String] = context
+  var result: CFTypeRef?
+  let found = SecItemCopyMatching(query as CFDictionary, &result)
+  if found == errSecItemNotFound {
+    return statusInvalidated
+  }
+  guard found == errSecSuccess, let result, CFGetTypeID(result) == SecKeyGetTypeID() else {
+    return statusFailed
+  }
+  let privateKey = result as! SecKey // swiftlint:disable:this force_cast
+  guard let publicKey = SecKeyCopyPublicKey(privateKey) else {
+    return statusFailed
+  }
+
+  // The caller's buffer as it is, as in cv_platform_seal.
+  var error: Unmanaged<CFError>?
+  guard let plaintext = CFDataCreateWithBytesNoCopy(nil, secret, secretLength, kCFAllocatorNull),
+        let sealed = SecKeyCreateEncryptedData(publicKey, algorithm, plaintext, &error) as Data?
+  else {
+    return statusFailed
+  }
+
+  let updated = SecItemUpdate(entryQuery(id) as CFDictionary, [kSecValueData as String: sealed] as CFDictionary)
+  switch updated {
+  case errSecSuccess:
+    return statusOk
+  case errSecItemNotFound:
+    return statusNotFound
+  default:
+    return statusFailed
+  }
+}
+
 @_cdecl("cv_platform_info")
 public func cvPlatformInfo(
   _ id: UnsafePointer<CChar>?, _ idLength: Int,
@@ -288,4 +345,41 @@ public func cvPlatformRemove(_ id: UnsafePointer<CChar>?, _ idLength: Int) -> In
   let key = SecItemDelete(keyQuery(id) as CFDictionary)
   let gone = [entry, key].allSatisfy { $0 == errSecSuccess || $0 == errSecItemNotFound }
   return gone ? statusOk : statusFailed
+}
+
+/// BIP-39 asks for NFKD, and the engine hashes the bytes it is given: the passphrase as Foundation decomposes it, so
+/// the same characters typed on any keyboard make the same seed, and the seed other wallets make.
+@_cdecl("cv_platform_normalize_passphrase")
+public func cvPlatformNormalizePassphrase(
+  _ passphrase: UnsafePointer<UInt8>?, _ passphraseLength: Int,
+  _ out: UnsafeMutablePointer<UInt8>?, _ outLength: Int,
+  _ written: UnsafeMutablePointer<Int>?
+) -> Int32 {
+  guard let out, let written, passphraseLength >= 0 else {
+    return statusInvalidArgument
+  }
+  if passphraseLength == 0 {
+    written.pointee = 0
+    return statusOk
+  }
+  guard let passphrase,
+        let typed = String(bytes: UnsafeBufferPointer(start: passphrase, count: passphraseLength), encoding: .utf8)
+  else {
+    return statusInvalidArgument
+  }
+  // The strings are Swift's and cannot be overwritten; the bytes the engine gets can.
+  var normalized = Array(typed.decomposedStringWithCompatibilityMapping.utf8)
+  defer {
+    normalized.withUnsafeMutableBufferPointer { $0.update(repeating: 0) }
+  }
+  guard normalized.count <= outLength else {
+    return statusBufferTooSmall
+  }
+  normalized.withUnsafeBufferPointer { bytes in
+    if let base = bytes.baseAddress {
+      out.update(from: base, count: bytes.count)
+    }
+  }
+  written.pointee = normalized.count
+  return statusOk
 }

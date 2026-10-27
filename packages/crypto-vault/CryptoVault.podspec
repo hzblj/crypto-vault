@@ -12,9 +12,10 @@ Pod::Spec.new do |s|
   s.platforms    = { :ios => min_ios_version_supported }
   s.source       = { :git => "https://github.com/hzblj/crypto-vault.git", :tag => "#{s.version}" }
 
-  # The bridge (C++, no cryptography) and the platform half it calls (Swift over the Security framework).
+  # The bridge (C++, no cryptography) and the platform half it calls (Swift over the Security framework, and
+  # AuthenticationServices for a passkey's PRF output).
   s.source_files = ["cpp/**/*.{h,hpp,cpp}", "ios/**/*.swift"]
-  s.frameworks   = ["CryptoKit", "LocalAuthentication", "Security"]
+  s.frameworks   = ["AuthenticationServices", "CryptoKit", "LocalAuthentication", "Security", "UIKit"]
 
   load "nitrogen/generated/ios/CryptoVault+autolinking.rb"
   add_nitrogen_files(s)

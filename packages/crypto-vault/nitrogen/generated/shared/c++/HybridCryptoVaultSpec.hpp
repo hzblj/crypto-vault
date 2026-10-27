@@ -19,6 +19,8 @@ namespace margelo::nitro::cryptovault { enum class Protection; }
 namespace margelo::nitro::cryptovault { enum class Access; }
 // Forward declaration of `VaultSeed` to properly resolve imports.
 namespace margelo::nitro::cryptovault { struct VaultSeed; }
+// Forward declaration of `BackupKind` to properly resolve imports.
+namespace margelo::nitro::cryptovault { enum class BackupKind; }
 
 #include "Protection.hpp"
 #include <string>
@@ -26,6 +28,7 @@ namespace margelo::nitro::cryptovault { struct VaultSeed; }
 #include <NitroModules/Promise.hpp>
 #include <NitroModules/ArrayBuffer.hpp>
 #include "VaultSeed.hpp"
+#include "BackupKind.hpp"
 
 namespace margelo::nitro::cryptovault {
 
@@ -57,18 +60,23 @@ namespace margelo::nitro::cryptovault {
       virtual Protection getAvailableProtection() = 0;
       virtual bool getSupported() = 0;
       virtual bool getBackupSupported() = 0;
+      virtual bool getPasskeySupported() = 0;
 
     public:
       // Methods
       virtual bool has(const std::string& id) = 0;
       virtual Protection protection(const std::string& id) = 0;
       virtual Access access(const std::string& id) = 0;
-      virtual std::shared_ptr<Promise<void>> create(const std::string& id, double words, Access access, const std::string& prompt) = 0;
-      virtual std::shared_ptr<Promise<void>> importMnemonic(const std::string& id, const std::shared_ptr<ArrayBuffer>& mnemonic, Access access, const std::string& prompt) = 0;
-      virtual std::shared_ptr<Promise<VaultSeed>> unlock(const std::string& id, const std::string& prompt) = 0;
+      virtual std::shared_ptr<Promise<void>> create(const std::string& id, double words, Access access, const std::string& prompt, const std::shared_ptr<ArrayBuffer>& passphrase) = 0;
+      virtual std::shared_ptr<Promise<void>> importMnemonic(const std::string& id, const std::shared_ptr<ArrayBuffer>& mnemonic, Access access, const std::string& prompt, const std::shared_ptr<ArrayBuffer>& passphrase) = 0;
+      virtual std::shared_ptr<Promise<VaultSeed>> unlock(const std::string& id, const std::string& prompt, const std::shared_ptr<ArrayBuffer>& passphrase, bool verifyPassphrase) = 0;
+      virtual std::shared_ptr<Promise<void>> setPassphrase(const std::string& id, const std::shared_ptr<ArrayBuffer>& passphrase, const std::string& prompt) = 0;
       virtual std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> revealMnemonic(const std::string& id, const std::string& prompt) = 0;
       virtual std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> backup(const std::string& id, const std::shared_ptr<ArrayBuffer>& password, const std::string& prompt) = 0;
-      virtual std::shared_ptr<Promise<void>> restore(const std::string& id, const std::shared_ptr<ArrayBuffer>& backup, const std::shared_ptr<ArrayBuffer>& password, Access access, const std::string& prompt) = 0;
+      virtual std::shared_ptr<Promise<void>> restore(const std::string& id, const std::shared_ptr<ArrayBuffer>& backup, const std::shared_ptr<ArrayBuffer>& password, Access access, const std::string& prompt, const std::shared_ptr<ArrayBuffer>& passphrase) = 0;
+      virtual std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> backupWithPasskey(const std::string& id, const std::string& relyingParty, const std::string& name, const std::string& prompt) = 0;
+      virtual std::shared_ptr<Promise<void>> restoreWithPasskey(const std::string& id, const std::shared_ptr<ArrayBuffer>& backup, const std::string& relyingParty, Access access, const std::string& prompt, const std::shared_ptr<ArrayBuffer>& passphrase) = 0;
+      virtual BackupKind backupKind(const std::shared_ptr<ArrayBuffer>& backup) = 0;
       virtual void remove(const std::string& id) = 0;
 
     protected:

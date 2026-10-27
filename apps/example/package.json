@@ -20,7 +20,7 @@
     "@hzblj/crypto-ethereum": "^0.2.0",
     "@hzblj/crypto-vault": "workspace:*",
     "@hzblj/kara-ui": "^0.15.3",
-    "@hzblj/nitro-crypto": "^0.1.4",
+    "@hzblj/nitro-crypto": "^0.1.5",
     "@lodev09/react-native-true-sheet": "3.11.18",
     "expo": "~57.0.31",
     "expo-build-properties": "~57.0.22",

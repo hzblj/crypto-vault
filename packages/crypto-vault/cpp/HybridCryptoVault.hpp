@@ -2,7 +2,8 @@
 // HybridCryptoVault.hpp
 // The vault's Nitro binding: JavaScript's calls in, the platform half (VaultPlatform.h) and nitro-crypto's engine
 // (NitroCryptoInterop.hpp) out. No cryptography here, and no secret ever goes back to JavaScript but the words
-// `revealMnemonic` is asked for: a backup is the engine's seal, safe anywhere.
+// `revealMnemonic` is asked for: a backup is the engine's seal, safe anywhere, and a passkey's PRF output goes from
+// the platform to the engine without leaving native code.
 //
 
 #pragma once
@@ -18,16 +19,22 @@ public:
   Protection getAvailableProtection() override;
   bool getSupported() override;
   bool getBackupSupported() override;
+  bool getPasskeySupported() override;
 
   bool has(const std::string& id) override;
   Protection protection(const std::string& id) override;
   Access access(const std::string& id) override;
 
-  std::shared_ptr<Promise<void>> create(const std::string& id, double words, Access access,
-                                        const std::string& prompt) override;
+  std::shared_ptr<Promise<void>> create(const std::string& id, double words, Access access, const std::string& prompt,
+                                        const std::shared_ptr<ArrayBuffer>& passphrase) override;
   std::shared_ptr<Promise<void>> importMnemonic(const std::string& id, const std::shared_ptr<ArrayBuffer>& mnemonic,
-                                                Access access, const std::string& prompt) override;
-  std::shared_ptr<Promise<VaultSeed>> unlock(const std::string& id, const std::string& prompt) override;
+                                                Access access, const std::string& prompt,
+                                                const std::shared_ptr<ArrayBuffer>& passphrase) override;
+  std::shared_ptr<Promise<VaultSeed>> unlock(const std::string& id, const std::string& prompt,
+                                             const std::shared_ptr<ArrayBuffer>& passphrase,
+                                             bool verifyPassphrase) override;
+  std::shared_ptr<Promise<void>> setPassphrase(const std::string& id, const std::shared_ptr<ArrayBuffer>& passphrase,
+                                               const std::string& prompt) override;
   std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> revealMnemonic(const std::string& id,
                                                                          const std::string& prompt) override;
   std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> backup(const std::string& id,
@@ -35,7 +42,17 @@ public:
                                                                  const std::string& prompt) override;
   std::shared_ptr<Promise<void>> restore(const std::string& id, const std::shared_ptr<ArrayBuffer>& backup,
                                          const std::shared_ptr<ArrayBuffer>& password, Access access,
-                                         const std::string& prompt) override;
+                                         const std::string& prompt,
+                                         const std::shared_ptr<ArrayBuffer>& passphrase) override;
+  std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> backupWithPasskey(const std::string& id,
+                                                                            const std::string& relyingParty,
+                                                                            const std::string& name,
+                                                                            const std::string& prompt) override;
+  std::shared_ptr<Promise<void>> restoreWithPasskey(const std::string& id, const std::shared_ptr<ArrayBuffer>& backup,
+                                                    const std::string& relyingParty, Access access,
+                                                    const std::string& prompt,
+                                                    const std::shared_ptr<ArrayBuffer>& passphrase) override;
+  BackupKind backupKind(const std::shared_ptr<ArrayBuffer>& backup) override;
   void remove(const std::string& id) override;
 };
 

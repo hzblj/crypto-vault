@@ -1,5 +1,8 @@
 package com.margelo.nitro.cryptovault
 
+import android.app.Activity
+import android.app.KeyguardManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
@@ -7,6 +10,9 @@ import android.security.keystore.KeyInfo
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
+import android.security.keystore.UserNotAuthenticatedException
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager.Authenticators
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
@@ -30,6 +36,11 @@ import javax.crypto.spec.GCMParameterSpec
  * invalidates when the enrolled biometrics change. And the entry itself: the secret sealed by that key, in the app's
  * no-backup directory, so it never leaves the device in a backup. Every use of the key goes through BiometricPrompt
  * with the cipher as its CryptoObject: the key works for that one operation, after that one prompt.
+ *
+ * Before API 30, BiometricPrompt takes no device credential beside a CryptoObject, so an entry the passcode opens too
+ * gets a key that works for AUTH_WINDOW_SECONDS after the person authenticates, biometrics or the device credential,
+ * and its cipher is made inside that window (a time-bound key). The Keystore does not invalidate such a key when the
+ * enrolled biometrics change: like the iOS entry that allows the passcode, it survives that through the passcode.
  */
 object VaultKeystore {
   // The values of VaultPlatform.h.
@@ -53,6 +64,13 @@ object VaultKeystore {
   private const val TAG_BITS = 128
   private const val ENTRY_VERSION: Byte = 1
 
+  /**
+   * How long a time-bound key (API 24 to 29, an entry the passcode opens too) works after the person authenticates:
+   * long enough to make one cipher, short enough that nothing else in the app has a moment of its own with it.
+   */
+  private const val AUTH_WINDOW_SECONDS = 5
+  private const val CONFIRM_CREDENTIAL = "com.hzblj.cryptovault.confirm-credential"
+
   private class VaultException(val status: Int) : Exception()
 
   private fun alias(id: String) = "com.hzblj.cryptovault.$id"
@@ -64,7 +82,10 @@ object VaultKeystore {
 
   private fun keyStore(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
 
-  /** What the person may use: strong biometrics, and the device credential too where the entry allows it (API 30+). */
+  /**
+   * What the person may use with a key for every use: strong biometrics, and the device credential too where the entry
+   * allows it (API 30+; before that, such an entry's key is time-bound, `authorizedCipher`).
+   */
   private fun authenticators(access: Int): Int =
     if (access == ACCESS_BIOMETRICS_OR_PASSCODE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL
@@ -108,8 +129,12 @@ object VaultKeystore {
             },
           )
         } else {
+          // -1: for every use, through a CryptoObject. Before API 30 that leaves out the device credential, so an
+          // entry that allows it gets a key for the few seconds after the person, however they authenticate.
           @Suppress("DEPRECATION")
-          setUserAuthenticationValidityDurationSeconds(-1)
+          setUserAuthenticationValidityDurationSeconds(
+            if (access == ACCESS_BIOMETRICS_OR_PASSCODE) AUTH_WINDOW_SECONDS else -1,
+          )
         }
         if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
           setIsStrongBoxBacked(true)
@@ -128,13 +153,16 @@ object VaultKeystore {
       context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
   }
 
+  private fun currentActivity(): FragmentActivity =
+    NitroModules.applicationContext?.currentActivity as? FragmentActivity ?: throw VaultException(FAILED)
+
   /**
-   * Shows BiometricPrompt for `cipher` and blocks the calling thread (a pool thread, never the JS or main thread)
-   * until the person answers: the cipher the prompt authorized, ready for its one operation.
+   * Shows BiometricPrompt, for `cipher` when there is one, and blocks the calling thread (a pool thread, never the JS
+   * or main thread) until the person answers: the cipher the prompt authorized, ready for its one operation, or null
+   * when there was none to authorize.
    */
-  private fun authorize(cipher: Cipher, prompt: String, access: Int): Cipher {
-    val activity = NitroModules.applicationContext?.currentActivity as? FragmentActivity
-      ?: throw VaultException(FAILED)
+  private fun showPrompt(prompt: String, allowed: Int, cipher: Cipher?): Cipher? {
+    val activity = currentActivity()
     val done = CountDownLatch(1)
     var authorized: Cipher? = null
     var status = FAILED
@@ -164,7 +192,6 @@ object VaultKeystore {
         }
       }
 
-      val allowed = authenticators(access)
       val info = BiometricPrompt.PromptInfo.Builder()
         .setTitle(prompt)
         .setAllowedAuthenticators(allowed)
@@ -174,12 +201,82 @@ object VaultKeystore {
           }
         }
         .build()
-      BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), callback)
-        .authenticate(info, BiometricPrompt.CryptoObject(cipher))
+      val biometricPrompt = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), callback)
+      if (cipher != null) {
+        biometricPrompt.authenticate(info, BiometricPrompt.CryptoObject(cipher))
+      } else {
+        biometricPrompt.authenticate(info)
+      }
     }
 
     done.await()
-    return authorized ?: throw VaultException(if (status == OK) FAILED else status)
+    if (status != OK) {
+      throw VaultException(status)
+    }
+    return authorized
+  }
+
+  /** BiometricPrompt for `cipher`, as its CryptoObject: the cipher, authorized for its one operation. */
+  private fun authorize(cipher: Cipher, prompt: String, access: Int): Cipher =
+    showPrompt(prompt, authenticators(access), cipher) ?: throw VaultException(FAILED)
+
+  /**
+   * The device credential screen (PIN, pattern or password), for a time-bound key a biometric did not open: a weak
+   * one opens none, and a slow hand can outlast the window. Blocks the calling thread until the person answers.
+   */
+  private fun confirmDeviceCredential(prompt: String) {
+    val activity = currentActivity()
+    @Suppress("DEPRECATION")
+    val intent = activity.getSystemService(KeyguardManager::class.java)
+      ?.createConfirmDeviceCredentialIntent(prompt, null)
+      ?: throw VaultException(UNAVAILABLE)
+    val done = CountDownLatch(1)
+    var status = FAILED
+
+    activity.runOnUiThread {
+      lateinit var launcher: ActivityResultLauncher<Intent>
+      launcher = activity.activityResultRegistry.register(
+        CONFIRM_CREDENTIAL,
+        ActivityResultContracts.StartActivityForResult(),
+      ) { result ->
+        status = if (result.resultCode == Activity.RESULT_OK) OK else CANCELLED
+        launcher.unregister()
+        done.countDown()
+      }
+      launcher.launch(intent)
+    }
+
+    done.await()
+    if (status != OK) {
+      throw VaultException(status)
+    }
+  }
+
+  /** Whether `key` works for some seconds after the person (API 24 to 29, an entry the passcode opens too). */
+  private fun isTimeBound(key: SecretKey): Boolean {
+    val info = SecretKeyFactory.getInstance(key.algorithm, KEYSTORE).getKeySpec(key, KeyInfo::class.java) as KeyInfo
+    @Suppress("DEPRECATION")
+    return info.userAuthenticationValidityDurationSeconds > 0
+  }
+
+  /**
+   * A cipher over `key` that the person authorized, initialized by `init`, for one operation. A key for every use goes
+   * through BiometricPrompt with the cipher as its CryptoObject. A time-bound key is opened by the person first,
+   * biometrics or the device credential, and the cipher made in the seconds after; when the biometric opened no key,
+   * the device credential screen follows, once.
+   */
+  private fun authorizedCipher(key: SecretKey, prompt: String, access: Int, init: Cipher.() -> Unit): Cipher {
+    if (!isTimeBound(key)) {
+      return authorize(Cipher.getInstance(TRANSFORMATION).apply(init), prompt, access)
+    }
+    // BIOMETRIC_STRONG with DEVICE_CREDENTIAL is not a combination androidx takes on API 28 and 29.
+    showPrompt(prompt, Authenticators.BIOMETRIC_WEAK or Authenticators.DEVICE_CREDENTIAL, null)
+    return try {
+      Cipher.getInstance(TRANSFORMATION).apply(init)
+    } catch (unauthenticated: UserNotAuthenticatedException) {
+      confirmDeviceCredential(prompt)
+      Cipher.getInstance(TRANSFORMATION).apply(init)
+    }
   }
 
   private fun statusOf(error: Throwable): Int = when (error) {
@@ -251,9 +348,14 @@ object VaultKeystore {
       }
       val protection = protectionOf(key, strongBox)
 
-      val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
+      val cipher = try {
+        authorizedCipher(key, prompt, access) { init(Cipher.ENCRYPT_MODE, key) }
+      } catch (error: Throwable) {
+        store.deleteEntry(alias(id))
+        throw error
+      }
       val sealed = try {
-        authorize(cipher, prompt, access).doFinal(secret)
+        cipher.doFinal(secret)
       } catch (error: Throwable) {
         store.deleteEntry(alias(id))
         throw error
@@ -291,15 +393,54 @@ object VaultKeystore {
       val sealed = entry.copyOfRange(4 + ivLength, entry.size)
 
       val key = keyStore().getKey(alias(id), null) as? SecretKey ?: return byteArrayOf(INVALIDATED.toByte())
-      val cipher = Cipher.getInstance(TRANSFORMATION).apply {
+      val cipher = authorizedCipher(key, prompt, access) {
         init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
       }
-      val secret = authorize(cipher, prompt, access).doFinal(sealed)
+      val secret = cipher.doFinal(sealed)
       val result = byteArrayOf(OK.toByte()) + secret
       secret.fill(0)
       result
     } catch (error: Throwable) {
       byteArrayOf(statusOf(error).toByte())
+    }
+  }
+
+  /**
+   * The entry under `id` sealed anew under its own key, its protection and access kept: the key works only after the
+   * person, so `prompt` shows first. The new entry is written beside the old one under a name no id has (`~`), then
+   * moved over it, so the entry is the old one or the new one, never neither.
+   */
+  @JvmStatic
+  fun reseal(id: String, secret: ByteArray, prompt: String): Int {
+    if (id.isEmpty() || secret.isEmpty()) {
+      return INVALID_ARGUMENT
+    }
+    return try {
+      val target = file(id)
+      if (!target.exists()) {
+        return NOT_FOUND
+      }
+      val entry = target.readBytes()
+      if (entry.size < 4 || entry[0] != ENTRY_VERSION) {
+        return FAILED
+      }
+      val protection = entry[1]
+      val access = entry[2].toInt()
+
+      val key = keyStore().getKey(alias(id), null) as? SecretKey ?: return INVALIDATED
+      val cipher = authorizedCipher(key, prompt, access) { init(Cipher.ENCRYPT_MODE, key) }
+      val sealed = cipher.doFinal(secret)
+      val iv = cipher.iv
+
+      val next = File(target.parentFile, "${target.name}~")
+      next.writeBytes(byteArrayOf(ENTRY_VERSION, protection, access.toByte(), iv.size.toByte()) + iv + sealed)
+      if (!next.renameTo(target)) {
+        next.delete()
+        return FAILED
+      }
+      OK
+    } catch (error: Throwable) {
+      statusOf(error)
     }
   }
 

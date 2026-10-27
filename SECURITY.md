@@ -31,10 +31,22 @@ opens it only for the person whose biometrics enrolled that key ([ADR 0001](docs
   natively and hands the engine a seed through nitro-crypto's interop (its ADR 0008); JavaScript receives a wallet,
   never a byte of what is behind it. The words come out on purpose only, through `revealMnemonic`, and the words a user
   types to restore cross as bytes the facade overwrites.
+- **A BIP-39 passphrase is applied, never kept; its wallet's fingerprint is sealed.** A passphrase crosses as bytes the
+  facade overwrites, as typed words do; the platform NFKD-normalizes it, the binding hands it to the engine with the
+  entropy and wipes its copies. BIP-39 has no checksum for it, so an entry given one keeps the 4-byte BIP-32
+  fingerprint of its wallet sealed with the entropy, in the same ciphertext, and `unlock` refuses a seed of another
+  fingerprint (`WRONG_PASSPHRASE`) and disposes it natively ([ADR 0005](docs/adr/0005-passphrase-check.md)). A wrong
+  passphrase passes about once in 2^32: the check is against typos.
 - **A backup is sealed by the engine, under a password.** `backup` opens an entry after the prompt and has the engine
   seal its entropy natively (Argon2id, XChaCha20-Poly1305, nitro-crypto's ADR 0009); `restore` opens one natively into
   a new entry ([ADR 0002](docs/adr/0002-password-sealed-backup.md)). What JavaScript holds is the sealed backup, which
   is as strong as its password: Argon2id makes each guess cost half a second and 64 MiB, not impossible.
+- **Or under a passkey, whose key stays native.** `backup` with a passkey has the platform evaluate the passkey's PRF
+  extension (user verification required) and hands the 32-byte output from the platform half to the engine, which
+  seals under it (HKDF-SHA256, XChaCha20-Poly1305, nitro-crypto's ADR 0010); the output never reaches JavaScript
+  ([ADR 0003](docs/adr/0003-passkey-sealed-backup.md)). Such a backup is as safe as the passkey: anyone who can use it,
+  on a device it synced to or through the provider's account, can open the backup. Only a passkey on the device seals
+  one, never one used over a QR code from another device, whose PRF output platforms have been seen to change.
 - **Protection is reported, not assumed.** Each entry says what holds its key (`secure-enclave`, `strongbox`, `tee`
   or `software`), measured from the key. A simulator or an emulator says `software`, and an app should say so too.
 
@@ -45,12 +57,28 @@ opens it only for the person whose biometrics enrolled that key ([ADR 0001](docs
 - Signing in the hardware: neither the Secure Enclave nor StrongBox holds secp256k1 or Ed25519 keys, so signing stays
   in nitro-crypto's engine, after the entry is opened.
 - What the platform keeps inside its own calls: the Security framework's and the JVM's buffers of the plaintext they
-  return. The vault wipes every buffer it owns, and the words it returns after decoding them.
-- Where a backup is stored, and who can read it there: the vault hands it over sealed, and the password is the guard.
+  return, CryptoKit's `SymmetricKey` that holds a passkey's PRF output on iOS, Credential Manager's response JSON that
+  carries it on Android (a string the JVM keeps until it collects it), and the Swift and Java strings a passphrase is
+  normalized through. The vault wipes every buffer it owns, and the words it returns after decoding them.
+- The passkey provider (iCloud Keychain, Google Password Manager, or another): it evaluates the PRF, and the vault
+  trusts its output, refusing only an all-zero one through the engine.
+- Where a backup is stored, and who can read it there: the vault hands it over sealed, and the password or the passkey
+  is the guard.
 - A weak backup password. The vault refuses fewer than 8 characters; the app decides what more to ask for.
+- Deniability of a hidden wallet once its entry holds a passphrase check: the stored fingerprint confirms which
+  passphrase is the real one to anyone who can open the entry. Who keeps decoys under other passphrases gives the
+  entry no passphrase, or unlocks with `verifyPassphrase: false`.
+- The app's domain: the relying party a passkey belongs to is the app's to name, and its apple-app-site-association
+  and assetlinks.json are the app owner's to keep.
 
 ## Known limitations
 
-- **Android before API 30** has no device-credential fallback for a key that needs authentication for every use: an
-  entry asked to open with the passcode too opens with biometrics only there.
+- **Android before API 30** takes no device credential for a key that needs authentication for every use, so an entry
+  asked to open with the passcode too gets a key that works for 5 seconds after the person authenticates
+  ([ADR 0004](docs/adr/0004-device-credential-before-api-30.md)). The vault always asks first, but in those seconds,
+  and in the seconds after the device itself is unlocked, the key works for any code in the app's process; and the
+  Keystore does not invalidate such a key when the enrolled biometrics change. API 30 and later keep a key for every
+  use.
+- **A passkey backup crosses platforms only with a provider that syncs to both:** iCloud Keychain's passkeys stay on
+  Apple devices, Google Password Manager's on Android and Chrome.
 - **The simulator has no Secure Enclave,** and the emulator's Keystore is software: both work, and say `software`.
