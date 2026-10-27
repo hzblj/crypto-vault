@@ -1,5 +1,7 @@
-# Android's prompt for an entry that opens with the device credential: the emulator's PIN, 1111. iOS needs nothing
-# here: the runner presents a face to the simulator every two seconds.
+# Android's prompt for an entry that opens with the device credential: the emulator's PIN, 1111. Some prompts take it
+# in a text field; Android 16's BiometricPrompt draws a keypad of buttons instead. The field comes first: once the
+# keypad's Enter closes the prompt, its key is gone too. iOS needs nothing here: the runner presents a face to the
+# simulator every two seconds.
 appId: ${APP_ID}
 ---
 - runFlow:
@@ -9,5 +11,20 @@ appId: ${APP_ID}
       - extendedWaitUntil:
           visible: ${PROMPT}
           timeout: 30000
-      - inputText: '1111'
-      - pressKey: Enter
+      - runFlow:
+          when:
+            notVisible:
+              id: com.android.systemui:id/key_enter
+          commands:
+            - inputText: '1111'
+            - pressKey: Enter
+      - runFlow:
+          when:
+            visible:
+              id: com.android.systemui:id/key_enter
+          commands:
+            - tapOn:
+                text: '1'
+                repeat: 4
+            - tapOn:
+                id: com.android.systemui:id/key_enter
