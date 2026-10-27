@@ -43,6 +43,8 @@ export const VaultScreen = () => {
   const [phrase, setPhrase] = useState<string[] | null>(null)
   const [signed, setSigned] = useState<Signed | null>(null)
   const [password, setPassword] = useState('')
+  // Kara's fields are uncontrolled: a new key mounts the password fields empty again.
+  const [passwordField, setPasswordField] = useState(0)
   const [backup, setBackup] = useState<Uint8Array | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -90,9 +92,23 @@ export const VaultScreen = () => {
   const reveal = () =>
     run(async () => setPhrase((await vault.revealMnemonic(ENTRY, {prompt: 'Show your recovery phrase'})).split(' ')))
 
-  const backUp = () => run(async () => setBackup(await vault.backup(ENTRY, {password, prompt: 'Back up your wallet'})))
+  // Once the password has done its work, it goes from the screen.
+  const forgetPassword = () => {
+    setPassword('')
+    setPasswordField(field => field + 1)
+  }
 
-  const restore = (sealed: Uint8Array) => run(() => vault.restore(ENTRY, sealed, {access, password}))
+  const backUp = () =>
+    run(async () => {
+      setBackup(await vault.backup(ENTRY, {password, prompt: 'Back up your wallet'}))
+      forgetPassword()
+    })
+
+  const restore = (sealed: Uint8Array) =>
+    run(async () => {
+      await vault.restore(ENTRY, sealed, {access, password})
+      forgetPassword()
+    })
 
   const remove = () => {
     vault.remove(ENTRY)
@@ -176,7 +192,13 @@ export const VaultScreen = () => {
           >
             <Island>
               <VStack spacing="s12" wide>
-                <TextField label="Password" onChangeText={setPassword} secure testID="vault-backup-password" />
+                <TextField
+                  key={passwordField}
+                  label="Password"
+                  onChangeText={setPassword}
+                  secure
+                  testID="vault-backup-password"
+                />
                 <Button
                   disabled={busy || password.length === 0}
                   label="Back up under this password"
@@ -226,7 +248,13 @@ export const VaultScreen = () => {
             >
               <Island>
                 <VStack spacing="s12" wide>
-                  <TextField label="Password" onChangeText={setPassword} secure testID="vault-restore-password" />
+                  <TextField
+                    key={passwordField}
+                    label="Password"
+                    onChangeText={setPassword}
+                    secure
+                    testID="vault-restore-password"
+                  />
                   <Button
                     disabled={busy || password.length === 0}
                     label="Restore the backup"
