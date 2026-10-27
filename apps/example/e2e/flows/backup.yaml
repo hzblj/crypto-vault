@@ -51,7 +51,7 @@ appId: ${APP_ID}
     env:
       PROMPT: Back up your wallet
 - scrollUntilVisible:
-    element: 103 bytes, sealed
+    element: 87 bytes, sealed
     timeout: 60000
 - takeScreenshot: ${OUT}-01-backed-up
 
