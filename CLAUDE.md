@@ -8,8 +8,8 @@ Every package has its own `CLAUDE.md`: read that one before touching it.
 
 | Path | Package | What lives there |
 | --- | --- | --- |
-| `packages/crypto-vault/` | `@hzblj/crypto-vault` | The Nitro module: the spec, the C++ binding (`cpp/`), the platform halves (`ios/` Swift, `android/` Kotlin and JNI), the facade (`src/`). ADR 0001. |
-| `apps/example/` | `crypto-vault-example` (private) | Expo Router app built with `@hzblj/kara-ui`: create or import a wallet, see what protects it, unlock it and sign, show its words, remove it. See its `CLAUDE.md`. |
+| `packages/crypto-vault/` | `@hzblj/crypto-vault` | The Nitro module: the spec, the C++ binding (`cpp/`), the platform halves (`ios/` Swift, `android/` Kotlin and JNI), the facade (`src/`). ADRs 0001 to 0004. |
+| `apps/example/` | `crypto-vault-example` (private) | Expo Router app built with `@hzblj/kara-ui`: create or import a wallet, see what protects it, unlock it (under a passphrase too) and sign, show its words, back it up under a password or a passkey and restore it, remove it. See its `CLAUDE.md`. |
 | `scripts/` | | `pack-check.mjs`, `sync-versions.mjs`. |
 | `docs/` | | The decisions (`adr/`). `SECURITY.md` is at the root. |
 
@@ -30,19 +30,23 @@ yarn changeset               # describe a change for the next release
 
 ## Conventions that bite
 
-**nitro-crypto comes first.** The vault needs `@hzblj/nitro-crypto` 0.1.4 or later: its `bip39-entropy` and
-`backup-argon2id` capabilities and native interop (ADRs 0008 and 0009 there). A change the vault needs in the engine is
-a release there first.
+**nitro-crypto comes first.** The vault needs `@hzblj/nitro-crypto` 0.1.5 or later: its `bip39-entropy`,
+`backup-argon2id` and `backup-hkdf-sha256` capabilities and native interop, `seedFromEntropy` under a passphrase among
+it (ADRs 0008 to 0010 there). A change the vault needs in the engine is a release there first.
 
-**Nothing JavaScript can call returns entropy.** The C++ binding is the only caller of the platform halves
-(`cpp/VaultPlatform.h`); they are not Hybrid Objects, so JavaScript cannot create one. `revealMnemonic` is the one call
-that returns a secret, the words, and the facade wipes the buffer once it has decoded them.
+**Nothing JavaScript can call returns entropy, or a passkey's PRF output.** The C++ binding is the only caller of the
+platform halves (`cpp/VaultPlatform.h`); they are not Hybrid Objects, so JavaScript cannot create one. `revealMnemonic`
+is the one call that returns a secret, the words, and the facade wipes the buffer once it has decoded them.
+
+**The passkey salt is part of the format.** `kPasskeySalt` in `cpp/HybridCryptoVault.cpp` is what every passkey backup
+was sealed under (ADR 0003): changing it loses them all. A new one is a `v2` evaluated beside it.
 
 **Status names, never messages.** Native code throws `CV_ERR_*` (or the engine's `NC_ERR_*`); the facade maps the name
 to a `VaultError` code and drops the rest.
 
-**The platform halves agree.** `ios/VaultPlatform.swift` and `android/.../VaultKeystore.kt` implement the same C
-interface and the same status, protection and access numbers; a change goes into both, and into the header.
+**The platform halves agree.** `ios/VaultPlatform.swift` and `VaultPasskey.swift`, and `android/.../VaultKeystore.kt`,
+`VaultPasskey.kt` and `VaultPassphrase.kt`, implement the same C interface and the same status, protection, access and
+passkey mode numbers; a change goes into both, and into the header.
 
 **Docs copy has no em dashes.** Not in the READMEs, the JSDoc in `src/`, changesets or the example's captions.
 

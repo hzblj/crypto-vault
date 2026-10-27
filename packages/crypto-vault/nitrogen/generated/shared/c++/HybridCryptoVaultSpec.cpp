@@ -17,6 +17,7 @@ namespace margelo::nitro::cryptovault {
       prototype.registerHybridGetter("availableProtection", &HybridCryptoVaultSpec::getAvailableProtection);
       prototype.registerHybridGetter("supported", &HybridCryptoVaultSpec::getSupported);
       prototype.registerHybridGetter("backupSupported", &HybridCryptoVaultSpec::getBackupSupported);
+      prototype.registerHybridGetter("passkeySupported", &HybridCryptoVaultSpec::getPasskeySupported);
       prototype.registerHybridMethod("has", &HybridCryptoVaultSpec::has);
       prototype.registerHybridMethod("protection", &HybridCryptoVaultSpec::protection);
       prototype.registerHybridMethod("access", &HybridCryptoVaultSpec::access);
@@ -26,6 +27,9 @@ namespace margelo::nitro::cryptovault {
       prototype.registerHybridMethod("revealMnemonic", &HybridCryptoVaultSpec::revealMnemonic);
       prototype.registerHybridMethod("backup", &HybridCryptoVaultSpec::backup);
       prototype.registerHybridMethod("restore", &HybridCryptoVaultSpec::restore);
+      prototype.registerHybridMethod("backupWithPasskey", &HybridCryptoVaultSpec::backupWithPasskey);
+      prototype.registerHybridMethod("restoreWithPasskey", &HybridCryptoVaultSpec::restoreWithPasskey);
+      prototype.registerHybridMethod("backupKind", &HybridCryptoVaultSpec::backupKind);
       prototype.registerHybridMethod("remove", &HybridCryptoVaultSpec::remove);
     });
   }

@@ -37,6 +37,10 @@ const char* statusName(cv_result status) {
       return "CV_ERR_UNAVAILABLE";
     case CV_ERR_BUFFER_TOO_SMALL:
       return "CV_ERR_BUFFER_TOO_SMALL";
+    case CV_ERR_PASSKEY_UNSUPPORTED:
+      return "CV_ERR_PASSKEY_UNSUPPORTED";
+    case CV_ERR_PASSKEY_NOT_FOUND:
+      return "CV_ERR_PASSKEY_NOT_FOUND";
     default:
       return "CV_ERR_FAILED";
   }
@@ -80,6 +84,52 @@ void checkBackupEngine() {
   }
 }
 
+/// Refuses a passkey backup on an engine that cannot seal under a key, or a system without passkeys that evaluate the
+/// PRF extension, before any sheet.
+void checkPasskeys() {
+  if (!interop::backupWithKeySupported()) {
+    throw std::runtime_error("CV_ERR_UNSUPPORTED");
+  }
+  if (cv_platform_passkey_supported() == 0) {
+    throw std::runtime_error(statusName(CV_ERR_PASSKEY_UNSUPPORTED));
+  }
+}
+
+/// A relying party is a domain the app is associated with: the facade checks its form, this only its bounds.
+const std::string& checkedRelyingParty(const std::string& relyingParty) {
+  if (relyingParty.empty() || relyingParty.size() > 253) {
+    throw std::runtime_error(statusName(CV_ERR_INVALID_ARGUMENT));
+  }
+  return relyingParty;
+}
+
+/// What a passkey's PRF is evaluated over for a backup: 32 ASCII bytes, the same on both platforms, for every backup
+/// and every id, so a new phone derives the same output with nothing but the passkey. Not a secret, and not the key:
+/// the engine's HKDF draws a fresh salt per backup, so each backup has a key of its own (docs/adr/0003). A later salt
+/// would be the PRF's second input in the same ceremony, and the version says which one sealed a backup.
+constexpr char kPasskeySalt[] = "hzblj/crypto-vault/backup-key/v1";
+constexpr size_t kPasskeySaltLength = sizeof(kPasskeySalt) - 1;
+static_assert(kPasskeySaltLength == 32, "the PRF salt is 32 bytes on both platforms");
+
+/// The PRF output of the passkey the person uses, from the platform into `key`: it goes to the engine and nowhere else.
+void passkeyKey(const std::string& relyingParty, int32_t mode, const std::string& name,
+                StackSecret<CV_PASSKEY_KEY_LENGTH>& key) {
+  check(cv_platform_passkey_key(relyingParty.data(), relyingParty.size(), mode, name.data(), name.size(),
+                                reinterpret_cast<const uint8_t*>(kPasskeySalt), kPasskeySaltLength, key.bytes,
+                                CV_PASSKEY_KEY_LENGTH));
+}
+
+/// `passphrase` as BIP-39 hashes it, NFKD-normalized by the platform into `out`: its length. Past the engine's 1024
+/// bytes it is a malformed call, not a buffer of the bridge's too small.
+size_t normalizedPassphrase(const SecretBytes& passphrase, StackSecret<CV_PASSPHRASE_MAX_LENGTH>& out) {
+  size_t written = 0;
+  const cv_result status = cv_platform_normalize_passphrase(reinterpret_cast<const uint8_t*>(passphrase.chars()),
+                                                            passphrase.size(), out.bytes, CV_PASSPHRASE_MAX_LENGTH,
+                                                            &written);
+  check(status == CV_ERR_BUFFER_TOO_SMALL ? CV_ERR_INVALID_ARGUMENT : status);
+  return written;
+}
+
 int32_t toPlatform(Access access) {
   return access == Access::BIOMETRICS_OR_PASSCODE ? CV_ACCESS_BIOMETRICS_OR_PASSCODE : CV_ACCESS_BIOMETRICS;
 }
@@ -117,21 +167,73 @@ void seal(const std::string& id, const uint8_t* entropy, size_t length, Access a
   check(cv_platform_seal(id.data(), id.size(), entropy, length, toPlatform(access), prompt.data(), prompt.size()));
 }
 
-/// A backup opened into `entropy`: its length. The engine reads a header it does not know, and parameters out of its
-/// bounds, as an invalid argument; here that is bytes that are no backup. A wrong password stays the engine's
-/// NC_ERR_VERIFICATION_FAILED.
-size_t openBackup(const std::vector<uint8_t>& backup, const SecretBytes& password,
-                  StackSecret<NC_ENTROPY_MAX_LENGTH>& entropy) {
+/// Runs `call` on a backup's bytes. The engine reads a header it does not know, and parameters out of its bounds, as
+/// an invalid argument; here that is bytes that are no backup. A failed tag is `wrongSecret` when there is one: the
+/// password's stays the engine's NC_ERR_VERIFICATION_FAILED, the passkey's is the vault's own.
+template <typename Call>
+auto readingBackup(Call&& call, const char* wrongSecret = nullptr) -> decltype(call()) {
   try {
-    return interop::backupOpen(backup.data(), backup.size(), password.chars(), password.size(), entropy.bytes,
-                               NC_ENTROPY_MAX_LENGTH);
+    return call();
   } catch (const std::runtime_error& error) {
     if (std::strcmp(error.what(), "NC_ERR_INVALID_ARGUMENT") == 0 ||
         std::strcmp(error.what(), "NC_ERR_INVALID_LENGTH") == 0) {
       throw std::runtime_error("CV_ERR_INVALID_BACKUP");
     }
+    if (wrongSecret != nullptr && std::strcmp(error.what(), "NC_ERR_VERIFICATION_FAILED") == 0) {
+      throw std::runtime_error(wrongSecret);
+    }
     throw;
   }
+}
+
+/// What opens a backup, from the engine's reading of its header (NC_BACKUP_KDF_*). An engine that seals nothing under
+/// a key reads nothing sealed under one either: every backup it opens is a password's.
+uint32_t keyDerivation(const uint8_t* backup, size_t length) {
+  if (!interop::backupWithKeySupported()) {
+    return NC_BACKUP_KDF_ARGON2ID;
+  }
+  return readingBackup([&] { return interop::backupKeyDerivation(backup, length); });
+}
+
+/// Refuses a backup that `expected` does not open, before any key derivation or prompt, and says what does.
+void checkKeyDerivation(const std::vector<uint8_t>& backup, uint32_t expected) {
+  const uint32_t found = keyDerivation(backup.data(), backup.size());
+  if (found == expected) {
+    return;
+  }
+  if (found == NC_BACKUP_KDF_KEY) {
+    throw std::runtime_error("CV_ERR_NEEDS_PASSKEY");
+  }
+  if (found == NC_BACKUP_KDF_ARGON2ID) {
+    throw std::runtime_error("CV_ERR_NEEDS_PASSWORD");
+  }
+  throw std::runtime_error("CV_ERR_INVALID_BACKUP");
+}
+
+/// A password backup opened into `entropy`: its length.
+size_t openBackup(const std::vector<uint8_t>& backup, const SecretBytes& password,
+                  StackSecret<NC_ENTROPY_MAX_LENGTH>& entropy) {
+  return readingBackup([&] {
+    return interop::backupOpen(backup.data(), backup.size(), password.chars(), password.size(), entropy.bytes,
+                               NC_ENTROPY_MAX_LENGTH);
+  });
+}
+
+/// A passkey backup opened under the PRF output `key` into `entropy`: its length.
+size_t openBackupWithKey(const std::vector<uint8_t>& backup, const StackSecret<CV_PASSKEY_KEY_LENGTH>& key,
+                         StackSecret<NC_ENTROPY_MAX_LENGTH>& entropy) {
+  return readingBackup(
+      [&] {
+        return interop::backupOpenWithKey(backup.data(), backup.size(), key.bytes, CV_PASSKEY_KEY_LENGTH,
+                                          entropy.bytes, NC_ENTROPY_MAX_LENGTH);
+      },
+      "CV_ERR_WRONG_PASSKEY");
+}
+
+/// A JS-owned backup, copied while the call still owns the buffer.
+std::shared_ptr<std::vector<uint8_t>> copied(const std::shared_ptr<ArrayBuffer>& backup) {
+  const auto bytes = view(backup);
+  return std::make_shared<std::vector<uint8_t>>(bytes.data, bytes.data + bytes.size);
 }
 
 } // namespace
@@ -146,6 +248,10 @@ bool HybridCryptoVault::getSupported() {
 
 bool HybridCryptoVault::getBackupSupported() {
   return interop::backupSupported();
+}
+
+bool HybridCryptoVault::getPasskeySupported() {
+  return interop::backupWithKeySupported() && cv_platform_passkey_supported() != 0;
 }
 
 bool HybridCryptoVault::has(const std::string& id) {
@@ -198,13 +304,22 @@ std::shared_ptr<Promise<void>> HybridCryptoVault::importMnemonic(const std::stri
   });
 }
 
-std::shared_ptr<Promise<VaultSeed>> HybridCryptoVault::unlock(const std::string& id, const std::string& prompt) {
+std::shared_ptr<Promise<VaultSeed>> HybridCryptoVault::unlock(const std::string& id, const std::string& prompt,
+                                                             const std::shared_ptr<ArrayBuffer>& passphrase) {
   checkEngine();
-  return Promise<VaultSeed>::async([id = checkedId(id), prompt]() {
+  // Copied while the call still owns the JS buffer; zeroized when the last copy goes, after the pool thread is done.
+  auto secret = std::make_shared<SecretBytes>(passphrase);
+  return Promise<VaultSeed>::async([id = checkedId(id), prompt, secret]() {
+    // Normalized first: a passphrase the engine would refuse fails before the prompt, not after it.
+    StackSecret<CV_PASSPHRASE_MAX_LENGTH> normalized;
+    const size_t normalizedLength = secret->size() == 0 ? 0 : normalizedPassphrase(*secret, normalized);
     StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
     const size_t length = open(id, prompt, entropy);
-    // The words behind it: 12 for 16 bytes, 3 more for every 4 bytes after.
-    return VaultSeed(interop::seedFromEntropy(entropy.bytes, length), static_cast<double>(length * 3 / 4));
+    // The words behind it: 12 for 16 bytes, 3 more for every 4 bytes after. Under no passphrase, or under one: a
+    // different seed, and a different wallet, for every passphrase, which nothing here can call wrong.
+    return VaultSeed(interop::seedFromEntropy(entropy.bytes, length, reinterpret_cast<const char*>(normalized.bytes),
+                                              normalizedLength),
+                     static_cast<double>(length * 3 / 4));
   });
 }
 
@@ -243,18 +358,67 @@ std::shared_ptr<Promise<void>> HybridCryptoVault::restore(const std::string& id,
                                                           const std::shared_ptr<ArrayBuffer>& password, Access access,
                                                           const std::string& prompt) {
   checkBackupEngine();
-  const auto bytes = view(backup);
-  auto sealed = std::make_shared<std::vector<uint8_t>>(bytes.data, bytes.data + bytes.size);
+  auto sealed = copied(backup);
   auto secret = std::make_shared<SecretBytes>(password);
   // Taken already: no half a second of Argon2id, and no prompt, for an entry that cannot be written.
   if (has(id)) {
     throw std::runtime_error(statusName(CV_ERR_EXISTS));
   }
+  // Sealed under a passkey: no password opens it, so none is tried.
+  checkKeyDerivation(*sealed, NC_BACKUP_KDF_ARGON2ID);
   return Promise<void>::async([id = checkedId(id), sealed, secret, access, prompt]() {
     StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
     const size_t length = openBackup(*sealed, *secret, entropy);
     seal(id, entropy.bytes, length, access, prompt);
   });
+}
+
+std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> HybridCryptoVault::backupWithPasskey(
+    const std::string& id, const std::string& relyingParty, const std::string& name, const std::string& prompt) {
+  checkPasskeys();
+  // No entry: no passkey sheet, and above all no new passkey, for a backup that cannot be made.
+  if (!has(id)) {
+    throw std::runtime_error(statusName(CV_ERR_NOT_FOUND));
+  }
+  return Promise<std::shared_ptr<ArrayBuffer>>::async(
+      [id = checkedId(id), relyingParty = checkedRelyingParty(relyingParty), name, prompt]() {
+        // The passkey first: a sheet the person dismisses leaves the entry unopened.
+        StackSecret<CV_PASSKEY_KEY_LENGTH> key;
+        passkeyKey(relyingParty, name.empty() ? CV_PASSKEY_SEAL : CV_PASSKEY_CREATE, name, key);
+        StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
+        const size_t length = open(id, prompt, entropy);
+        uint8_t sealed[NC_BACKUP_MAX_LENGTH];
+        const size_t written = interop::backupSealWithKey(entropy.bytes, length, key.bytes, CV_PASSKEY_KEY_LENGTH,
+                                                          sealed, NC_BACKUP_MAX_LENGTH);
+        // Sealed, so JavaScript may hold it: what keeps it is the passkey.
+        return ArrayBuffer::copy(sealed, written);
+      });
+}
+
+std::shared_ptr<Promise<void>> HybridCryptoVault::restoreWithPasskey(const std::string& id,
+                                                                     const std::shared_ptr<ArrayBuffer>& backup,
+                                                                     const std::string& relyingParty, Access access,
+                                                                     const std::string& prompt) {
+  checkPasskeys();
+  auto sealed = copied(backup);
+  // Taken already, no backup, or a password's: said before any sheet.
+  if (has(id)) {
+    throw std::runtime_error(statusName(CV_ERR_EXISTS));
+  }
+  checkKeyDerivation(*sealed, NC_BACKUP_KDF_KEY);
+  return Promise<void>::async(
+      [id = checkedId(id), sealed, relyingParty = checkedRelyingParty(relyingParty), access, prompt]() {
+        StackSecret<CV_PASSKEY_KEY_LENGTH> key;
+        passkeyKey(relyingParty, CV_PASSKEY_OPEN, std::string(), key);
+        StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
+        const size_t length = openBackupWithKey(*sealed, key, entropy);
+        seal(id, entropy.bytes, length, access, prompt);
+      });
+}
+
+BackupKind HybridCryptoVault::backupKind(const std::shared_ptr<ArrayBuffer>& backup) {
+  const auto bytes = view(backup);
+  return keyDerivation(bytes.data, bytes.size) == NC_BACKUP_KDF_KEY ? BackupKind::PASSKEY : BackupKind::PASSWORD;
 }
 
 void HybridCryptoVault::remove(const std::string& id) {

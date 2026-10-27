@@ -14,16 +14,19 @@ import Foundation
 import LocalAuthentication
 import Security
 
-// The values of VaultPlatform.h, which Swift cannot import from C++ sources.
-private let statusOk: Int32 = 0
-private let statusInvalidArgument: Int32 = 1
-private let statusNotFound: Int32 = 2
-private let statusExists: Int32 = 3
-private let statusCancelled: Int32 = 4
-private let statusInvalidated: Int32 = 5
-private let statusUnavailable: Int32 = 6
-private let statusBufferTooSmall: Int32 = 7
-private let statusFailed: Int32 = 8
+// The values of VaultPlatform.h, which Swift cannot import from C++ sources. Internal: VaultPasskey.swift says them
+// too.
+let statusOk: Int32 = 0
+let statusInvalidArgument: Int32 = 1
+let statusNotFound: Int32 = 2
+let statusExists: Int32 = 3
+let statusCancelled: Int32 = 4
+let statusInvalidated: Int32 = 5
+let statusUnavailable: Int32 = 6
+let statusBufferTooSmall: Int32 = 7
+let statusFailed: Int32 = 8
+let statusPasskeyUnsupported: Int32 = 9
+let statusPasskeyNotFound: Int32 = 10
 
 private let protectionSoftware: Int32 = 0
 private let protectionSecureEnclave: Int32 = 3
@@ -51,7 +54,8 @@ private var hasSecureEnclave: Bool {
   !onSimulator && SecureEnclave.isAvailable
 }
 
-private func text(_ pointer: UnsafePointer<CChar>?, _ length: Int) -> String? {
+/// A UTF-8 argument of the C interface as a string: nil for a null pointer with a length.
+func text(_ pointer: UnsafePointer<CChar>?, _ length: Int) -> String? {
   if length == 0 {
     return ""
   }
@@ -288,4 +292,41 @@ public func cvPlatformRemove(_ id: UnsafePointer<CChar>?, _ idLength: Int) -> In
   let key = SecItemDelete(keyQuery(id) as CFDictionary)
   let gone = [entry, key].allSatisfy { $0 == errSecSuccess || $0 == errSecItemNotFound }
   return gone ? statusOk : statusFailed
+}
+
+/// BIP-39 asks for NFKD, and the engine hashes the bytes it is given: the passphrase as Foundation decomposes it, so
+/// the same characters typed on any keyboard make the same seed, and the seed other wallets make.
+@_cdecl("cv_platform_normalize_passphrase")
+public func cvPlatformNormalizePassphrase(
+  _ passphrase: UnsafePointer<UInt8>?, _ passphraseLength: Int,
+  _ out: UnsafeMutablePointer<UInt8>?, _ outLength: Int,
+  _ written: UnsafeMutablePointer<Int>?
+) -> Int32 {
+  guard let out, let written, passphraseLength >= 0 else {
+    return statusInvalidArgument
+  }
+  if passphraseLength == 0 {
+    written.pointee = 0
+    return statusOk
+  }
+  guard let passphrase,
+        let typed = String(bytes: UnsafeBufferPointer(start: passphrase, count: passphraseLength), encoding: .utf8)
+  else {
+    return statusInvalidArgument
+  }
+  // The strings are Swift's and cannot be overwritten; the bytes the engine gets can.
+  var normalized = Array(typed.decomposedStringWithCompatibilityMapping.utf8)
+  defer {
+    normalized.withUnsafeMutableBufferPointer { $0.update(repeating: 0) }
+  }
+  guard normalized.count <= outLength else {
+    return statusBufferTooSmall
+  }
+  normalized.withUnsafeBufferPointer { bytes in
+    if let base = bytes.baseAddress {
+      out.update(from: base, count: bytes.count)
+    }
+  }
+  written.pointee = normalized.count
+  return statusOk
 }

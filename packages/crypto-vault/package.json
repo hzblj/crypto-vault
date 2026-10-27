@@ -63,13 +63,13 @@
     "test": "node --conditions=source --import tsx --test 'test/**/*.test.ts'"
   },
   "peerDependencies": {
-    "@hzblj/nitro-crypto": "^0.1.4",
+    "@hzblj/nitro-crypto": "^0.1.5",
     "react": "*",
     "react-native": "*",
     "react-native-nitro-modules": "^0.37.1"
   },
   "devDependencies": {
-    "@hzblj/nitro-crypto": "^0.1.4",
+    "@hzblj/nitro-crypto": "^0.1.5",
     "@scure/bip39": "2.4.0",
     "@types/node": "^22.19.0",
     "@types/react": "~19.2.14",

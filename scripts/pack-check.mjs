@@ -35,10 +35,13 @@ const REQUIRED = {
     'cpp/HybridCryptoVault.cpp',
     'cpp/VaultPlatform.h',
     'ios/VaultPlatform.swift',
+    'ios/VaultPasskey.swift',
     'android/build.gradle',
     'android/CMakeLists.txt',
     'android/src/main/cpp/VaultPlatformAndroid.cpp',
     'android/src/main/java/com/margelo/nitro/cryptovault/VaultKeystore.kt',
+    'android/src/main/java/com/margelo/nitro/cryptovault/VaultPasskey.kt',
+    'android/src/main/java/com/margelo/nitro/cryptovault/VaultPassphrase.kt',
     'nitrogen/generated/shared/c++/HybridCryptoVaultSpec.hpp',
   ],
 }
@@ -98,12 +101,12 @@ for (const {directory, name} of packages) {
 }
 
 const consumer = `import {ethereumAdapter} from '@hzblj/crypto-ethereum'
-import {createVault, isVaultError, type Protection, type Vault, VaultError} from '@hzblj/crypto-vault'
+import {type BackupKind, createVault, isVaultError, type Protection, type Vault, VaultError} from '@hzblj/crypto-vault'
 import {createCryptoEngine} from '@hzblj/nitro-crypto'
 
 export const vaulted = async () => {
   const crypto = createCryptoEngine({adapters: [ethereumAdapter()]})
-  const vault: Vault<typeof crypto.chains> = createVault(crypto)
+  const vault: Vault<typeof crypto.chains> = createVault(crypto, {relyingParty: 'wallet.example.com'})
   const protection: Protection = vault.protection('main')
   await vault.create('main', {access: 'biometrics-or-passcode', words: 24})
   await vault.importMnemonic('restored', 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about')
@@ -113,14 +116,29 @@ export const vaulted = async () => {
   const words: string = await vault.revealMnemonic('main', {prompt: 'Show your recovery phrase'})
   wallet.dispose()
 
+  const hidden = await vault.unlock('main', {passphrase: 'TREZOR', prompt: 'Unlock your hidden wallet'})
+  const fingerprint: number = hidden.fingerprint
+  hidden.dispose()
+  const backup: Uint8Array = await vault.backup('main', {password: 'correct horse', prompt: 'Back up'})
+  const passkeyBackup = await vault.backup('main', {passkey: {name: 'Main wallet'}, prompt: 'Back up'})
+  await vault.backup('main', {passkey: true, prompt: 'Back up'})
+  const kind: BackupKind = vault.backupKind(passkeyBackup)
+  await vault.restore('copy', passkeyBackup, {access: 'biometrics', passkey: true})
+  await vault.restore('copy', backup, {password: 'correct horse'})
+  const passkeys: boolean = vault.passkeySupported
+
   // @ts-expect-error: unlocking says why
   await vault.unlock('main')
   // @ts-expect-error: no mnemonic has 13 words
   await vault.create('main', {words: 13})
   // @ts-expect-error: the vault's wallets are its engine's, with its chains
   await wallet.deriveAccount({chain: 'bitcoin', index: 0})
+  // @ts-expect-error: a backup has a password or a passkey, not both
+  await vault.backup('main', {passkey: true, password: 'correct horse', prompt: 'Back up'})
+  // @ts-expect-error: a restore picks an existing passkey, it makes none
+  await vault.restore('copy', passkeyBackup, {passkey: {name: 'Main wallet'}})
 
-  return [protection, signature, words, isVaultError(new VaultError('CANCELLED'))]
+  return [protection, signature, words, fingerprint, kind, passkeys, isVaultError(new VaultError('WRONG_PASSKEY'))]
 }
 `
 

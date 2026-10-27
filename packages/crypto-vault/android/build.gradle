@@ -142,8 +142,13 @@ dependencies {
   // after @hzblj/nitro-crypto.
   implementation project(":hzblj_nitro-crypto")
 
-  // BiometricPrompt, with the cipher as its CryptoObject, and the FragmentActivity it shows over.
+  // BiometricPrompt, with the cipher as its CryptoObject, and the FragmentActivity it shows over (whose activity result
+  // registry shows the device credential screen before API 30).
   implementation "androidx.biometric:biometric:1.1.0"
   implementation "androidx.fragment:fragment-ktx:1.8.9"
+
+  // Credential Manager, for a passkey's PRF output: the platform's own from Android 14, Google Play services' before.
+  implementation "androidx.credentials:credentials:1.6.0"
+  implementation "androidx.credentials:credentials-play-services-auth:1.6.0"
 }
 
