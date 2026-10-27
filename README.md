@@ -33,7 +33,8 @@ const account = await wallet.deriveAccount({chain: 'ethereum', index: 0})
 await account.signMessage({message: 'Hello from the vault'})
 wallet.dispose()
 
-await vault.unlock('main', {passphrase, prompt: 'Unlock your wallet'}) // a BIP-39 passphrase, applied natively
+await vault.setPassphrase('main', {passphrase, prompt: 'Check your passphrase'}) // its wallet's fingerprint, sealed
+await vault.unlock('main', {passphrase, prompt: 'Unlock your wallet'}) // WRONG_PASSPHRASE for any other
 
 const words = await vault.revealMnemonic('main', {prompt: 'Show your recovery phrase'}) // the one secret that comes out
 

@@ -267,6 +267,59 @@ public func cvPlatformOpen(
   return statusOk
 }
 
+/// The entry under `id` sealed anew to its own key's public half, which asks no one: the Keychain item's data is
+/// replaced in one update, its metadata kept, so the entry is the old one or the new one, never neither.
+@_cdecl("cv_platform_reseal")
+public func cvPlatformReseal(
+  _ id: UnsafePointer<CChar>?, _ idLength: Int,
+  _ secret: UnsafePointer<UInt8>?, _ secretLength: Int,
+  _: UnsafePointer<CChar>?, _: Int
+) -> Int32 {
+  guard let id = text(id, idLength), !id.isEmpty, let secret, secretLength > 0 else {
+    return statusInvalidArgument
+  }
+  guard readEntry(id) != nil else {
+    return statusNotFound
+  }
+
+  // A reference to the key, which needs no one: using the private half would, and sealing uses the public half only.
+  let context = LAContext()
+  context.interactionNotAllowed = true
+  var query = keyQuery(id)
+  query[kSecReturnRef as String] = true
+  query[kSecUseAuthenticationContext as String] = context
+  var result: CFTypeRef?
+  let found = SecItemCopyMatching(query as CFDictionary, &result)
+  if found == errSecItemNotFound {
+    return statusInvalidated
+  }
+  guard found == errSecSuccess, let result, CFGetTypeID(result) == SecKeyGetTypeID() else {
+    return statusFailed
+  }
+  let privateKey = result as! SecKey // swiftlint:disable:this force_cast
+  guard let publicKey = SecKeyCopyPublicKey(privateKey) else {
+    return statusFailed
+  }
+
+  // The caller's buffer as it is, as in cv_platform_seal.
+  var error: Unmanaged<CFError>?
+  guard let plaintext = CFDataCreateWithBytesNoCopy(nil, secret, secretLength, kCFAllocatorNull),
+        let sealed = SecKeyCreateEncryptedData(publicKey, algorithm, plaintext, &error) as Data?
+  else {
+    return statusFailed
+  }
+
+  let updated = SecItemUpdate(entryQuery(id) as CFDictionary, [kSecValueData as String: sealed] as CFDictionary)
+  switch updated {
+  case errSecSuccess:
+    return statusOk
+  case errSecItemNotFound:
+    return statusNotFound
+  default:
+    return statusFailed
+  }
+}
+
 @_cdecl("cv_platform_info")
 public func cvPlatformInfo(
   _ id: UnsafePointer<CChar>?, _ idLength: Int,

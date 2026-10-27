@@ -31,10 +31,12 @@ opens it only for the person whose biometrics enrolled that key ([ADR 0001](docs
   natively and hands the engine a seed through nitro-crypto's interop (its ADR 0008); JavaScript receives a wallet,
   never a byte of what is behind it. The words come out on purpose only, through `revealMnemonic`, and the words a user
   types to restore cross as bytes the facade overwrites.
-- **A BIP-39 passphrase is applied, never kept.** `unlock`'s passphrase crosses as bytes the facade overwrites, as
-  typed words do; the platform NFKD-normalizes it, the binding hands it to the engine with the entropy and wipes its
-  copies. Nothing stores it, so nothing can check it: a wrong passphrase opens a different wallet, by BIP-39's design,
-  and the app shows `wallet.fingerprint` for the person to compare.
+- **A BIP-39 passphrase is applied, never kept; its wallet's fingerprint is sealed.** A passphrase crosses as bytes the
+  facade overwrites, as typed words do; the platform NFKD-normalizes it, the binding hands it to the engine with the
+  entropy and wipes its copies. BIP-39 has no checksum for it, so an entry given one keeps the 4-byte BIP-32
+  fingerprint of its wallet sealed with the entropy, in the same ciphertext, and `unlock` refuses a seed of another
+  fingerprint (`WRONG_PASSPHRASE`) and disposes it natively ([ADR 0005](docs/adr/0005-passphrase-check.md)). A wrong
+  passphrase passes about once in 2^32: the check is against typos.
 - **A backup is sealed by the engine, under a password.** `backup` opens an entry after the prompt and has the engine
   seal its entropy natively (Argon2id, XChaCha20-Poly1305, nitro-crypto's ADR 0009); `restore` opens one natively into
   a new entry ([ADR 0002](docs/adr/0002-password-sealed-backup.md)). What JavaScript holds is the sealed backup, which
@@ -63,6 +65,9 @@ opens it only for the person whose biometrics enrolled that key ([ADR 0001](docs
 - Where a backup is stored, and who can read it there: the vault hands it over sealed, and the password or the passkey
   is the guard.
 - A weak backup password. The vault refuses fewer than 8 characters; the app decides what more to ask for.
+- Deniability of a hidden wallet once its entry holds a passphrase check: the stored fingerprint confirms which
+  passphrase is the real one to anyone who can open the entry. Who keeps decoys under other passphrases gives the
+  entry no passphrase, or unlocks with `verifyPassphrase: false`.
 - The app's domain: the relying party a passkey belongs to is the app's to name, and its apple-app-site-association
   and assetlinks.json are the app owner's to keep.
 

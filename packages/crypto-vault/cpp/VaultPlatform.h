@@ -66,6 +66,15 @@ cv_result cv_platform_seal(const char *id, size_t id_len, const uint8_t *secret,
 cv_result cv_platform_open(const char *id, size_t id_len, const char *prompt, size_t prompt_len, uint8_t *out,
                            size_t out_len, size_t *written);
 
+/**
+ * Replaces what the entry under `id` holds with `secret`, sealed under the entry's own key, its protection and access
+ * unchanged: the entry is replaced whole or not at all. iOS seals with the key's public half and asks no one;
+ * Android's key works only after the person, so it shows `prompt`. CV_ERR_NOT_FOUND when there is no entry,
+ * CV_ERR_INVALIDATED when its key is gone.
+ */
+cv_result cv_platform_reseal(const char *id, size_t id_len, const uint8_t *secret, size_t secret_len,
+                             const char *prompt, size_t prompt_len);
+
 /** The CV_PROTECTION_* and CV_ACCESS_* of the entry under `id`, without opening it. CV_ERR_NOT_FOUND when none. */
 cv_result cv_platform_info(const char *id, size_t id_len, int32_t *protection, int32_t *access);
 

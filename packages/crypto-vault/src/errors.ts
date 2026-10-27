@@ -22,6 +22,7 @@ export const VAULT_ERROR_CODES = [
   'UNSUPPORTED',
   'WEAK_PASSWORD',
   'WRONG_PASSKEY',
+  'WRONG_PASSPHRASE',
   'WRONG_PASSWORD',
 ] as const
 
@@ -47,6 +48,7 @@ const DEFAULT_MESSAGES: Record<VaultErrorCode, string> = {
     'The linked @hzblj/nitro-crypto engine lacks a capability the vault needs (bip39-entropy, backup-argon2id for backups, or backup-hkdf-sha256 for passkey backups).',
   WEAK_PASSWORD: 'A backup password needs at least 8 characters.',
   WRONG_PASSKEY: 'This passkey does not open the backup, or the backup was changed.',
+  WRONG_PASSPHRASE: 'This is not the passphrase the wallet was given: it would open a different wallet.',
   WRONG_PASSWORD: 'The password does not open this backup, or the backup was changed.',
 }
 

@@ -8,8 +8,8 @@ Every package has its own `CLAUDE.md`: read that one before touching it.
 
 | Path | Package | What lives there |
 | --- | --- | --- |
-| `packages/crypto-vault/` | `@hzblj/crypto-vault` | The Nitro module: the spec, the C++ binding (`cpp/`), the platform halves (`ios/` Swift, `android/` Kotlin and JNI), the facade (`src/`). ADRs 0001 to 0004. |
-| `apps/example/` | `crypto-vault-example` (private) | Expo Router app built with `@hzblj/kara-ui`: create or import a wallet, see what protects it, unlock it (under a passphrase too) and sign, show its words, back it up under a password or a passkey and restore it, remove it. See its `CLAUDE.md`. |
+| `packages/crypto-vault/` | `@hzblj/crypto-vault` | The Nitro module: the spec, the C++ binding (`cpp/`), the platform halves (`ios/` Swift, `android/` Kotlin and JNI), the facade (`src/`). ADRs 0001 to 0005. |
+| `apps/example/` | `crypto-vault-example` (private) | Expo Router app built with `@hzblj/kara-ui`: create or import a wallet, see what protects it, unlock it (under a passphrase too, which it can check) and sign, show its words, back it up under a password or a passkey and restore it, remove it. See its `CLAUDE.md`. |
 | `scripts/` | | `pack-check.mjs`, `sync-versions.mjs`. |
 | `docs/` | | The decisions (`adr/`). `SECURITY.md` is at the root. |
 
@@ -37,6 +37,9 @@ it (ADRs 0008 to 0010 there). A change the vault needs in the engine is a releas
 **Nothing JavaScript can call returns entropy, or a passkey's PRF output.** The C++ binding is the only caller of the
 platform halves (`cpp/VaultPlatform.h`); they are not Hybrid Objects, so JavaScript cannot create one. `revealMnemonic`
 is the one call that returns a secret, the words, and the facade wipes the buffer once it has decoded them.
+
+**The sealed payload is a format.** What an entry seals is `cpp/VaultPayload.hpp`'s: version 1 (entropy alone, every
+entry from before 0.3.0) must keep opening, and a change is a new version beside it, held to `test/payload.cpp`.
 
 **The passkey salt is part of the format.** `kPasskeySalt` in `cpp/HybridCryptoVault.cpp` is what every passkey backup
 was sealed under (ADR 0003): changing it loses them all. A new one is a `v2` evaluated beside it.

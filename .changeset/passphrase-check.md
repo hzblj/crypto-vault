@@ -1,0 +1,5 @@
+---
+'@hzblj/crypto-vault': minor
+---
+
+A wrong BIP-39 passphrase fails instead of opening another wallet. BIP-39 has no checksum for a passphrase, so an entry given one keeps the 4-byte BIP-32 fingerprint of its wallet sealed with the entropy (inside the Secure Enclave's ECIES or the Keystore's AES-GCM, never in readable metadata, never the passphrase), and `unlock` refuses a wallet of another fingerprint with `WRONG_PASSPHRASE`, disposing it natively; leaving the passphrase out is checked as the empty one. `create`, `importMnemonic` and `restore` take `passphrase`, and `setPassphrase(id, {passphrase, prompt})` gives an existing entry a check or, with `null`, takes it away. `unlock(id, {verifyPassphrase: false})` skips the check, for whoever keeps decoy or hidden wallets under other passphrases, as a stored fingerprint tells anyone who can open the entry which passphrase is real. A wrong passphrase passes once in about 2^32. Ask for the passphrase twice where it is set. Backups still hold the entropy alone. Entries sealed by earlier versions open as before, with no check; an entry sealed by this version does not open in an earlier one (ADR 0005).

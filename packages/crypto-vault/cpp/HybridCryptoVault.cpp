@@ -3,6 +3,7 @@
 //
 
 #include "HybridCryptoVault.hpp"
+#include "VaultPayload.hpp"
 #include "VaultPlatform.h"
 
 #include <NitroCrypto/NitroCryptoInterop.hpp>
@@ -119,15 +120,28 @@ void passkeyKey(const std::string& relyingParty, int32_t mode, const std::string
                                 CV_PASSKEY_KEY_LENGTH));
 }
 
-/// `passphrase` as BIP-39 hashes it, NFKD-normalized by the platform into `out`: its length. Past the engine's 1024
-/// bytes it is a malformed call, not a buffer of the bridge's too small.
-size_t normalizedPassphrase(const SecretBytes& passphrase, StackSecret<CV_PASSPHRASE_MAX_LENGTH>& out) {
-  size_t written = 0;
-  const cv_result status = cv_platform_normalize_passphrase(reinterpret_cast<const uint8_t*>(passphrase.chars()),
-                                                            passphrase.size(), out.bytes, CV_PASSPHRASE_MAX_LENGTH,
-                                                            &written);
+/// A BIP-39 passphrase as the engine hashes it: NFKD-normalized by the platform, empty for none, zeroized on the way
+/// out of its scope.
+struct Passphrase {
+  StackSecret<CV_PASSPHRASE_MAX_LENGTH> bytes;
+  size_t length = 0;
+
+  const char* chars() const {
+    return reinterpret_cast<const char*>(bytes.bytes);
+  }
+};
+
+/// The passphrase a call was given, normalized into `out`. Past the engine's 1024 bytes it is a malformed call, not a
+/// buffer of the bridge's too small. Run first, so one the engine would refuse fails before any prompt.
+void normalize(const SecretBytes& typed, Passphrase& out) {
+  out.length = 0;
+  if (typed.size() == 0) {
+    return;
+  }
+  const cv_result status = cv_platform_normalize_passphrase(reinterpret_cast<const uint8_t*>(typed.chars()),
+                                                            typed.size(), out.bytes.bytes, CV_PASSPHRASE_MAX_LENGTH,
+                                                            &out.length);
   check(status == CV_ERR_BUFFER_TOO_SMALL ? CV_ERR_INVALID_ARGUMENT : status);
-  return written;
 }
 
 int32_t toPlatform(Access access) {
@@ -155,16 +169,57 @@ size_t entropyLength(double words) {
   throw std::runtime_error(statusName(CV_ERR_INVALID_ARGUMENT));
 }
 
-/// The entry under `id`, opened into `entropy`: its length.
-size_t open(const std::string& id, const std::string& prompt, StackSecret<NC_ENTROPY_MAX_LENGTH>& entropy) {
+/// An entry opened: its entropy, and the passphrase check sealed with it, if any (cpp/VaultPayload.hpp).
+struct Opened {
+  StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
+  size_t length = 0;
+  payload::Check check;
+};
+
+/// The entry under `id`, opened after `prompt` and read: version 1's entropy alone, or version 2's with its check.
+void open(const std::string& id, const std::string& prompt, Opened& entry) {
+  StackSecret<payload::kMaxLength> sealed;
   size_t written = 0;
-  check(cv_platform_open(id.data(), id.size(), prompt.data(), prompt.size(), entropy.bytes, NC_ENTROPY_MAX_LENGTH,
+  check(cv_platform_open(id.data(), id.size(), prompt.data(), prompt.size(), sealed.bytes, payload::kMaxLength,
                          &written));
+  entry.length = payload::read(sealed.bytes, written, entry.entropy.bytes, entry.check);
+  if (entry.length == 0) {
+    throw std::runtime_error(statusName(CV_ERR_FAILED));
+  }
+}
+
+/// The BIP-32 fingerprint of the wallet `entropy` makes under `passphrase`: a seed the engine makes and zeroizes again
+/// at once.
+uint32_t fingerprintOf(const uint8_t* entropy, size_t length, const Passphrase& passphrase) {
+  auto seed = interop::seedFromEntropy(entropy, length, passphrase.chars(), passphrase.length);
+  const auto fingerprint = static_cast<uint32_t>(seed->getFingerprint());
+  seed->dispose();
+  return fingerprint;
+}
+
+/// `entropy` as an entry's version 2 payload, into `out`, with the check of `passphrase` when there is one: its
+/// length. Every new entry is version 2, a check or not, so the sealed bytes' length tells nobody which.
+size_t entryPayload(const uint8_t* entropy, size_t length, const Passphrase& passphrase,
+                    StackSecret<payload::kMaxLength>& out) {
+  payload::Check check;
+  if (passphrase.length > 0) {
+    check.present = true;
+    check.fingerprint = fingerprintOf(entropy, length, passphrase);
+  }
+  const size_t written = payload::write(entropy, length, check, out.bytes);
+  if (written == 0) {
+    throw std::runtime_error(statusName(CV_ERR_INVALID_ARGUMENT));
+  }
   return written;
 }
 
-void seal(const std::string& id, const uint8_t* entropy, size_t length, Access access, const std::string& prompt) {
-  check(cv_platform_seal(id.data(), id.size(), entropy, length, toPlatform(access), prompt.data(), prompt.size()));
+/// `entropy` sealed under a new key for `id`, with the check of `passphrase` when there is one.
+void seal(const std::string& id, const uint8_t* entropy, size_t length, Access access, const std::string& prompt,
+          const Passphrase& passphrase) {
+  StackSecret<payload::kMaxLength> sealed;
+  const size_t written = entryPayload(entropy, length, passphrase, sealed);
+  check(cv_platform_seal(id.data(), id.size(), sealed.bytes, written, toPlatform(access), prompt.data(),
+                         prompt.size()));
 }
 
 /// Runs `call` on a backup's bytes. The engine reads a header it does not know, and parameters out of its bounds, as
@@ -280,46 +335,78 @@ Access HybridCryptoVault::access(const std::string& id) {
 }
 
 std::shared_ptr<Promise<void>> HybridCryptoVault::create(const std::string& id, double words, Access access,
-                                                         const std::string& prompt) {
+                                                         const std::string& prompt,
+                                                         const std::shared_ptr<ArrayBuffer>& passphrase) {
   checkEngine();
   const size_t length = entropyLength(words);
-  return Promise<void>::async([id = checkedId(id), length, access, prompt]() {
+  // Copied while the call still owns the JS buffer; zeroized when the last copy goes, after the pool thread is done.
+  auto typed = std::make_shared<SecretBytes>(passphrase);
+  return Promise<void>::async([id = checkedId(id), length, access, prompt, typed]() {
+    Passphrase normalized;
+    normalize(*typed, normalized);
     StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
     interop::randomBytes(entropy.bytes, length);
-    seal(id, entropy.bytes, length, access, prompt);
+    seal(id, entropy.bytes, length, access, prompt, normalized);
   });
 }
 
 std::shared_ptr<Promise<void>> HybridCryptoVault::importMnemonic(const std::string& id,
                                                                  const std::shared_ptr<ArrayBuffer>& mnemonic,
-                                                                 Access access, const std::string& prompt) {
+                                                                 Access access, const std::string& prompt,
+                                                                 const std::shared_ptr<ArrayBuffer>& passphrase) {
   checkEngine();
-  // Copied while the call still owns the JS buffer; zeroized when the last copy goes, after the pool thread is done.
+  // Copied while the call still owns the JS buffers; zeroized when the last copy goes, after the pool thread is done.
   auto words = std::make_shared<SecretBytes>(mnemonic);
-  return Promise<void>::async([id = checkedId(id), words, access, prompt]() {
+  auto typed = std::make_shared<SecretBytes>(passphrase);
+  return Promise<void>::async([id = checkedId(id), words, access, prompt, typed]() {
+    Passphrase normalized;
+    normalize(*typed, normalized);
     StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
     const size_t length = interop::entropyFromMnemonic(words->chars(), words->size(), entropy.bytes,
                                                        NC_ENTROPY_MAX_LENGTH);
-    seal(id, entropy.bytes, length, access, prompt);
+    seal(id, entropy.bytes, length, access, prompt, normalized);
   });
 }
 
 std::shared_ptr<Promise<VaultSeed>> HybridCryptoVault::unlock(const std::string& id, const std::string& prompt,
-                                                             const std::shared_ptr<ArrayBuffer>& passphrase) {
+                                                             const std::shared_ptr<ArrayBuffer>& passphrase,
+                                                             bool verifyPassphrase) {
   checkEngine();
   // Copied while the call still owns the JS buffer; zeroized when the last copy goes, after the pool thread is done.
-  auto secret = std::make_shared<SecretBytes>(passphrase);
-  return Promise<VaultSeed>::async([id = checkedId(id), prompt, secret]() {
-    // Normalized first: a passphrase the engine would refuse fails before the prompt, not after it.
-    StackSecret<CV_PASSPHRASE_MAX_LENGTH> normalized;
-    const size_t normalizedLength = secret->size() == 0 ? 0 : normalizedPassphrase(*secret, normalized);
-    StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
-    const size_t length = open(id, prompt, entropy);
-    // The words behind it: 12 for 16 bytes, 3 more for every 4 bytes after. Under no passphrase, or under one: a
-    // different seed, and a different wallet, for every passphrase, which nothing here can call wrong.
-    return VaultSeed(interop::seedFromEntropy(entropy.bytes, length, reinterpret_cast<const char*>(normalized.bytes),
-                                              normalizedLength),
-                     static_cast<double>(length * 3 / 4));
+  auto typed = std::make_shared<SecretBytes>(passphrase);
+  return Promise<VaultSeed>::async([id = checkedId(id), prompt, typed, verifyPassphrase]() {
+    Passphrase normalized;
+    normalize(*typed, normalized);
+    Opened entry;
+    open(id, prompt, entry);
+    // Every passphrase makes a wallet; BIP-39 has no checksum to say which is meant. An entry given one keeps the
+    // fingerprint of its wallet, sealed with the entropy, and a seed of another fingerprint goes before anyone sees it.
+    auto seed = interop::seedFromEntropy(entry.entropy.bytes, entry.length, normalized.chars(), normalized.length);
+    if (verifyPassphrase && entry.check.present &&
+        static_cast<uint32_t>(seed->getFingerprint()) != entry.check.fingerprint) {
+      seed->dispose();
+      throw std::runtime_error("CV_ERR_WRONG_PASSPHRASE");
+    }
+    // The words behind it: 12 for 16 bytes, 3 more for every 4 bytes after.
+    return VaultSeed(seed, static_cast<double>(entry.length * 3 / 4));
+  });
+}
+
+std::shared_ptr<Promise<void>> HybridCryptoVault::setPassphrase(const std::string& id,
+                                                                const std::shared_ptr<ArrayBuffer>& passphrase,
+                                                                const std::string& prompt) {
+  checkEngine();
+  // Copied while the call still owns the JS buffer; zeroized when the last copy goes, after the pool thread is done.
+  auto typed = std::make_shared<SecretBytes>(passphrase);
+  return Promise<void>::async([id = checkedId(id), typed, prompt]() {
+    Passphrase normalized;
+    normalize(*typed, normalized);
+    Opened entry;
+    open(id, prompt, entry);
+    // The same entropy, now with this passphrase's check or with none, under the same key.
+    StackSecret<payload::kMaxLength> sealed;
+    const size_t written = entryPayload(entry.entropy.bytes, entry.length, normalized, sealed);
+    check(cv_platform_reseal(id.data(), id.size(), sealed.bytes, written, prompt.data(), prompt.size()));
   });
 }
 
@@ -327,11 +414,11 @@ std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> HybridCryptoVault::reveal
                                                                                         const std::string& prompt) {
   checkEngine();
   return Promise<std::shared_ptr<ArrayBuffer>>::async([id = checkedId(id), prompt]() {
-    StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
-    const size_t length = open(id, prompt, entropy);
+    Opened entry;
+    open(id, prompt, entry);
     StackSecret<NC_MNEMONIC_MAX_LENGTH> sentence;
-    const size_t written = interop::mnemonicFromEntropy(entropy.bytes, length, reinterpret_cast<char*>(sentence.bytes),
-                                                        NC_MNEMONIC_MAX_LENGTH);
+    const size_t written = interop::mnemonicFromEntropy(entry.entropy.bytes, entry.length,
+                                                        reinterpret_cast<char*>(sentence.bytes), NC_MNEMONIC_MAX_LENGTH);
     // The one secret that goes to JavaScript, on purpose: the facade decodes the words and overwrites this buffer.
     return ArrayBuffer::copy(sentence.bytes, written);
   });
@@ -343,11 +430,12 @@ std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> HybridCryptoVault::backup
   // Copied while the call still owns the JS buffer; zeroized when the last copy goes, after the pool thread is done.
   auto secret = std::make_shared<SecretBytes>(password);
   return Promise<std::shared_ptr<ArrayBuffer>>::async([id = checkedId(id), secret, prompt]() {
-    StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
-    const size_t length = open(id, prompt, entropy);
+    // The entropy alone: a passphrase check stays with the entry, and a restore seals a new one.
+    Opened entry;
+    open(id, prompt, entry);
     uint8_t sealed[NC_BACKUP_MAX_LENGTH];
-    const size_t written =
-        interop::backupSeal(entropy.bytes, length, secret->chars(), secret->size(), sealed, NC_BACKUP_MAX_LENGTH);
+    const size_t written = interop::backupSeal(entry.entropy.bytes, entry.length, secret->chars(), secret->size(),
+                                               sealed, NC_BACKUP_MAX_LENGTH);
     // Sealed, so JavaScript may hold it: what keeps it is the password.
     return ArrayBuffer::copy(sealed, written);
   });
@@ -356,20 +444,24 @@ std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> HybridCryptoVault::backup
 std::shared_ptr<Promise<void>> HybridCryptoVault::restore(const std::string& id,
                                                           const std::shared_ptr<ArrayBuffer>& backup,
                                                           const std::shared_ptr<ArrayBuffer>& password, Access access,
-                                                          const std::string& prompt) {
+                                                          const std::string& prompt,
+                                                          const std::shared_ptr<ArrayBuffer>& passphrase) {
   checkBackupEngine();
   auto sealed = copied(backup);
   auto secret = std::make_shared<SecretBytes>(password);
+  auto typed = std::make_shared<SecretBytes>(passphrase);
   // Taken already: no half a second of Argon2id, and no prompt, for an entry that cannot be written.
   if (has(id)) {
     throw std::runtime_error(statusName(CV_ERR_EXISTS));
   }
   // Sealed under a passkey: no password opens it, so none is tried.
   checkKeyDerivation(*sealed, NC_BACKUP_KDF_ARGON2ID);
-  return Promise<void>::async([id = checkedId(id), sealed, secret, access, prompt]() {
+  return Promise<void>::async([id = checkedId(id), sealed, secret, access, prompt, typed]() {
+    Passphrase normalized;
+    normalize(*typed, normalized);
     StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
     const size_t length = openBackup(*sealed, *secret, entropy);
-    seal(id, entropy.bytes, length, access, prompt);
+    seal(id, entropy.bytes, length, access, prompt, normalized);
   });
 }
 
@@ -385,11 +477,11 @@ std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> HybridCryptoVault::backup
         // The passkey first: a sheet the person dismisses leaves the entry unopened.
         StackSecret<CV_PASSKEY_KEY_LENGTH> key;
         passkeyKey(relyingParty, name.empty() ? CV_PASSKEY_SEAL : CV_PASSKEY_CREATE, name, key);
-        StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
-        const size_t length = open(id, prompt, entropy);
+        Opened entry;
+        open(id, prompt, entry);
         uint8_t sealed[NC_BACKUP_MAX_LENGTH];
-        const size_t written = interop::backupSealWithKey(entropy.bytes, length, key.bytes, CV_PASSKEY_KEY_LENGTH,
-                                                          sealed, NC_BACKUP_MAX_LENGTH);
+        const size_t written = interop::backupSealWithKey(entry.entropy.bytes, entry.length, key.bytes,
+                                                          CV_PASSKEY_KEY_LENGTH, sealed, NC_BACKUP_MAX_LENGTH);
         // Sealed, so JavaScript may hold it: what keeps it is the passkey.
         return ArrayBuffer::copy(sealed, written);
       });
@@ -398,21 +490,25 @@ std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> HybridCryptoVault::backup
 std::shared_ptr<Promise<void>> HybridCryptoVault::restoreWithPasskey(const std::string& id,
                                                                      const std::shared_ptr<ArrayBuffer>& backup,
                                                                      const std::string& relyingParty, Access access,
-                                                                     const std::string& prompt) {
+                                                                     const std::string& prompt,
+                                                                     const std::shared_ptr<ArrayBuffer>& passphrase) {
   checkPasskeys();
   auto sealed = copied(backup);
+  auto typed = std::make_shared<SecretBytes>(passphrase);
   // Taken already, no backup, or a password's: said before any sheet.
   if (has(id)) {
     throw std::runtime_error(statusName(CV_ERR_EXISTS));
   }
   checkKeyDerivation(*sealed, NC_BACKUP_KDF_KEY);
   return Promise<void>::async(
-      [id = checkedId(id), sealed, relyingParty = checkedRelyingParty(relyingParty), access, prompt]() {
+      [id = checkedId(id), sealed, relyingParty = checkedRelyingParty(relyingParty), access, prompt, typed]() {
+        Passphrase normalized;
+        normalize(*typed, normalized);
         StackSecret<CV_PASSKEY_KEY_LENGTH> key;
         passkeyKey(relyingParty, CV_PASSKEY_OPEN, std::string(), key);
         StackSecret<NC_ENTROPY_MAX_LENGTH> entropy;
         const size_t length = openBackupWithKey(*sealed, key, entropy);
-        seal(id, entropy.bytes, length, access, prompt);
+        seal(id, entropy.bytes, length, access, prompt, normalized);
       });
 }
 

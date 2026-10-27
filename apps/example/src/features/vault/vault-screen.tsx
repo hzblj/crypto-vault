@@ -28,6 +28,10 @@ type Signed = {address: string; fingerprint: number; passphrase: boolean; verifi
 /** A wallet's BIP-32 fingerprint as wallets show it: eight hex digits. */
 const fingerprint = (value: number) => value.toString(16).padStart(8, '0')
 
+/** What unlocking says when the entry was given another passphrase. */
+const WRONG_PASSPHRASE =
+  'Wrong passphrase: it is not the one this wallet was given. Type it again, exactly as you wrote it down.'
+
 /** What went wrong, for a person: the vault's codes in words, anything else by its message. */
 const describe = (error: unknown) => {
   if (isVaultError(error)) {
@@ -53,6 +57,11 @@ export const VaultScreen = () => {
   // Kara's fields are uncontrolled: a new key mounts the password fields empty again.
   const [passwordField, setPasswordField] = useState(0)
   const [passphrase, setPassphrase] = useState('')
+  const [wrongPassphrase, setWrongPassphrase] = useState(false)
+  // The passphrase to check from now on, typed twice; a new key mounts both fields empty again.
+  const [checked, setChecked] = useState('')
+  const [checkedAgain, setCheckedAgain] = useState('')
+  const [checkFields, setCheckFields] = useState(0)
   const [backup, setBackup] = useState<Uint8Array | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -87,7 +96,18 @@ export const VaultScreen = () => {
 
   const unlockAndSign = () =>
     run(async () => {
-      const wallet = await vault.unlock(ENTRY, {passphrase, prompt: 'Unlock your wallet'})
+      setWrongPassphrase(false)
+      let wallet: Awaited<ReturnType<typeof vault.unlock>>
+      try {
+        wallet = await vault.unlock(ENTRY, {passphrase, prompt: 'Unlock your wallet'})
+      } catch (error) {
+        if (isVaultError(error) && error.code === 'WRONG_PASSPHRASE') {
+          setSigned(null)
+          setWrongPassphrase(true)
+          return
+        }
+        throw error
+      }
       try {
         const account = await wallet.deriveAccount({chain: 'ethereum', index: 0})
         const signature = await account.signMessage({message: MESSAGE})
@@ -104,6 +124,15 @@ export const VaultScreen = () => {
 
   const reveal = () =>
     run(async () => setPhrase((await vault.revealMnemonic(ENTRY, {prompt: 'Show your recovery phrase'})).split(' ')))
+
+  // Sealed with the entry from now on, or no longer: the fields empty again either way.
+  const checkPassphrase = (next: string | null) =>
+    run(async () => {
+      await vault.setPassphrase(ENTRY, {passphrase: next, prompt: 'Check your passphrase'})
+      setChecked('')
+      setCheckedAgain('')
+      setCheckFields(field => field + 1)
+    })
 
   // Once the password has done its work, it goes from the screen.
   const forgetPassword = () => {
@@ -136,6 +165,7 @@ export const VaultScreen = () => {
     setPassword('')
     setPhrase(null)
     setSigned(null)
+    setWrongPassphrase(false)
     refresh()
   }
 
@@ -168,7 +198,7 @@ export const VaultScreen = () => {
       {sealed ? (
         <>
           <Section
-            caption="Unlocking derives the first Ethereum account and signs a message with it. A passphrase makes another wallet: a mistyped one opens an empty wallet, silently, so check its fingerprint."
+            caption="Unlocking derives the first Ethereum account and signs a message with it. A passphrase makes another wallet: once the vault checks one (below), any other is refused; until then, compare the fingerprint."
             title="Wallet"
           >
             <Island>
@@ -199,6 +229,14 @@ export const VaultScreen = () => {
                 />
               </VStack>
             </Island>
+            {wrongPassphrase ? (
+              <Notice
+                testID="vault-wrong-passphrase"
+                text={WRONG_PASSPHRASE}
+                title="Wrong passphrase"
+                tone="destructive"
+              />
+            ) : null}
           </Section>
 
           {signed ? (
@@ -216,6 +254,44 @@ export const VaultScreen = () => {
               </Island>
             </Section>
           ) : null}
+
+          <Section
+            caption="The vault seals the fingerprint of this passphrase's wallet with the entropy, never the passphrase, and unlocking refuses any other. Type it twice: a typo here would be the passphrase it checks."
+            title="Passphrase check"
+          >
+            <Island>
+              <VStack spacing="s12" wide>
+                <TextField
+                  key={`check-${checkFields}`}
+                  label="Passphrase"
+                  onChangeText={setChecked}
+                  secure
+                  testID="vault-check-passphrase"
+                />
+                <TextField
+                  key={`again-${checkFields}`}
+                  label="Passphrase again"
+                  onChangeText={setCheckedAgain}
+                  secure
+                  testID="vault-check-passphrase-again"
+                />
+                <Button
+                  disabled={busy || checked === '' || checked !== checkedAgain}
+                  label="Check this passphrase at unlock"
+                  onPress={() => checkPassphrase(checked)}
+                  testID="vault-check"
+                  variant="secondary"
+                />
+                <Button
+                  disabled={busy}
+                  label="Stop checking a passphrase"
+                  onPress={() => checkPassphrase(null)}
+                  testID="vault-uncheck"
+                  variant="secondary"
+                />
+              </VStack>
+            </Island>
+          </Section>
 
           {phrase ? (
             <Section title="Recovery phrase">

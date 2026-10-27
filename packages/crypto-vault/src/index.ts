@@ -33,6 +33,7 @@ export {
   type PasskeyBackupOptions,
   type PasskeyChoice,
   type PasskeyRestoreOptions,
+  type PassphraseOptions,
   type PasswordBackupOptions,
   type PasswordRestoreOptions,
   type PromptOptions,

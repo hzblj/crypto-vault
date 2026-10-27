@@ -1,8 +1,8 @@
 # example
 
 The example app for `@hzblj/crypto-vault`: one wallet in the vault, end to end. Create one or restore one from words,
-see what protects it, unlock it (Face ID or the fingerprint, under a BIP-39 passphrase if one is typed, and its
-fingerprint shown) and sign an Ethereum message with it, show its words, back it up under a password or a new passkey,
+see what protects it, unlock it (Face ID or the fingerprint, under a BIP-39 passphrase if one is typed, refused when
+the vault checks another, and its fingerprint shown), give it a passphrase to check (typed twice) and sign an Ethereum message with it, show its words, back it up under a password or a new passkey,
 remove it and restore it from the backup. Built from `@hzblj/kara-ui` like every hzblj example. Private; never
 published.
 

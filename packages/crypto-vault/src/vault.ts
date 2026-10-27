@@ -16,6 +16,11 @@ export type VaultOptions = {
 export type SealOptions = {
   /** Who opens the entry: biometrics only (the default), or biometrics with the device passcode as the fallback. */
   readonly access?: Access
+  /**
+   * The wallet's BIP-39 passphrase, so `unlock` can tell a mistyped one: the fingerprint of the wallet it makes is
+   * sealed with the entropy, never the passphrase itself. Ask the person to type it twice first; empty is none.
+   */
+  readonly passphrase?: string
   /** What Android's prompt says: its keys open for sealing too only after the person. iOS asks no one to seal. */
   readonly prompt?: string
 }
@@ -32,11 +37,25 @@ export type PromptOptions = {
 
 export type UnlockOptions = PromptOptions & {
   /**
-   * A BIP-39 passphrase, the "25th word": the wallet the words make under it, which the vault never stores. Every
-   * passphrase opens a wallet, so a mistyped one opens a different, empty wallet, silently: show `wallet.fingerprint`
-   * so the person can tell. NFKD-normalized natively, at most 1024 bytes of UTF-8 after that.
+   * A BIP-39 passphrase, the "25th word": the wallet the words make under it. NFKD-normalized natively, at most 1024
+   * bytes of UTF-8 after that; left out, the wallet of no passphrase. When the entry was given a passphrase, a wallet
+   * of another fingerprint is refused with `WRONG_PASSPHRASE`; an entry given none opens under any passphrase, so show
+   * `wallet.fingerprint`.
    */
   readonly passphrase?: string
+  /**
+   * `false` skips the passphrase check: for a person who keeps other wallets under other passphrases on purpose (a
+   * decoy, a hidden wallet), whose every passphrase must open. Defaults to `true`.
+   */
+  readonly verifyPassphrase?: boolean
+}
+
+export type PassphraseOptions = PromptOptions & {
+  /**
+   * The passphrase `unlock` checks from now on, or `null` (or empty) for no check. Ask the person to type it twice:
+   * the vault cannot tell a typo from another wallet's passphrase.
+   */
+  readonly passphrase: string | null
 }
 
 /**
@@ -62,6 +81,11 @@ export type BackupOptions = PasswordBackupOptions | PasskeyBackupOptions
 type RestoreTarget = {
   /** Who opens the restored entry: biometrics only (the default), or biometrics with the device passcode. */
   readonly access?: Access
+  /**
+   * The wallet's BIP-39 passphrase, for `unlock` to check, as `create` takes it: a backup holds the entropy alone, so
+   * the check is the restore's to set again.
+   */
+  readonly passphrase?: string
   /** What Android's prompt says: its keys open for sealing too only after the person. */
   readonly prompt?: string
 }
@@ -100,8 +124,16 @@ export type Vault<Chains> = {
   readonly create: (id: string, options?: CreateOptions) => Promise<void>
   /** A wallet restored from its words, sealed under `id`. The words cross as bytes this package overwrites afterwards. */
   readonly importMnemonic: (id: string, mnemonic: string, options?: SealOptions) => Promise<void>
-  /** After the system prompt, the entry under `id` as a wallet in the engine, under a BIP-39 passphrase if given. */
+  /**
+   * After the system prompt, the entry under `id` as a wallet in the engine, under a BIP-39 passphrase if given:
+   * `WRONG_PASSPHRASE` when the entry was given another one.
+   */
   readonly unlock: (id: string, options: UnlockOptions) => Promise<EphemeralWallet<Chains>>
+  /**
+   * After the system prompt, the passphrase `unlock` checks for the entry under `id` from now on, or none for `null`:
+   * the entry is sealed again with the fingerprint of the wallet it makes. Android asks a second time, to seal.
+   */
+  readonly setPassphrase: (id: string, options: PassphraseOptions) => Promise<void>
   /** After the system prompt, the words of the entry under `id`, for the user to write down. */
   readonly revealMnemonic: (id: string, options: PromptOptions) => Promise<string>
   /** Whether the linked engine seals backups (`@hzblj/nitro-crypto` 0.1.4 and later). */
@@ -291,8 +323,14 @@ export const createVaultOn = <Chains>(
       return native(() => host.backupSupported)
     },
     create: (id: string, options: CreateOptions = {}) =>
-      nativeAsync(() =>
-        host.create(id, options.words ?? 12, options.access ?? 'biometrics', options.prompt ?? DEFAULT_SEAL_PROMPT)
+      withPassphrase(options.passphrase, phrase =>
+        host.create(
+          id,
+          options.words ?? 12,
+          options.access ?? 'biometrics',
+          options.prompt ?? DEFAULT_SEAL_PROMPT,
+          phrase
+        )
       ),
     has: (id: string) => native(() => host.has(id)),
     importMnemonic: async (id: string, mnemonic: string, options: SealOptions = {}) => {
@@ -301,8 +339,8 @@ export const createVaultOn = <Chains>(
       const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
 
       try {
-        await nativeAsync(() =>
-          host.importMnemonic(id, buffer, options.access ?? 'biometrics', options.prompt ?? DEFAULT_SEAL_PROMPT)
+        await withPassphrase(options.passphrase, phrase =>
+          host.importMnemonic(id, buffer, options.access ?? 'biometrics', options.prompt ?? DEFAULT_SEAL_PROMPT, phrase)
         )
       } finally {
         bytes.fill(0)
@@ -333,7 +371,9 @@ export const createVaultOn = <Chains>(
         if (native(() => host.backupKind(sealed)) === 'password') {
           throw new VaultError('NEEDS_PASSWORD')
         }
-        await nativeAsync(() => host.restoreWithPasskey(id, sealed, party, access, sealPrompt))
+        await withPassphrase(options.passphrase, phrase =>
+          host.restoreWithPasskey(id, sealed, party, access, sealPrompt, phrase)
+        )
         return
       }
 
@@ -341,7 +381,9 @@ export const createVaultOn = <Chains>(
       if (native(() => host.backupKind(sealed)) === 'passkey') {
         throw new VaultError('NEEDS_PASSKEY')
       }
-      await withPassword(password, buffer => host.restore(id, sealed, buffer, access, sealPrompt))
+      await withPassword(password, buffer =>
+        withPassphrase(options?.passphrase, phrase => host.restore(id, sealed, buffer, access, sealPrompt, phrase))
+      )
     },
     revealMnemonic: async (id: string, options: PromptOptions) => {
       const buffer = await nativeAsync(() => host.revealMnemonic(id, prompt(options)))
@@ -353,9 +395,22 @@ export const createVaultOn = <Chains>(
         bytes.fill(0)
       }
     },
+    setPassphrase: async (id: string, options: PassphraseOptions) => {
+      const text = prompt(options)
+      const passphrase = options.passphrase
+      if (passphrase !== null && typeof passphrase !== 'string') {
+        throw new VaultError('INVALID_ARGUMENT', 'A passphrase is a string, or null for no check.')
+      }
+
+      await withPassphrase(passphrase ?? '', buffer => host.setPassphrase(id, buffer, text))
+    },
     unlock: async (id: string, options: UnlockOptions) => {
       const text = prompt(options)
-      const {seed, words} = await withPassphrase(options.passphrase, buffer => host.unlock(id, text, buffer))
+      const verify = options.verifyPassphrase ?? true
+      if (typeof verify !== 'boolean') {
+        throw new VaultError('INVALID_ARGUMENT', 'verifyPassphrase is true or false.')
+      }
+      const {seed, words} = await withPassphrase(options.passphrase, buffer => host.unlock(id, text, buffer, verify))
 
       return crypto.createEphemeralWallet({seed, words: words as MnemonicLength})
     },

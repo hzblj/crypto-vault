@@ -52,7 +52,8 @@ const kindOf = (backup: ArrayBuffer): BackupKind => {
  * Not a model of the hardware, only of the contract the facade relies on.
  */
 const fakeHost = () => {
-  const entries = new Map<string, {access: Access; entropy: Uint8Array}>()
+  // An entry: its entropy, and the fingerprint of its passphrase's wallet when it was given one, sealed together.
+  const entries = new Map<string, {access: Access; entropy: Uint8Array; fingerprint?: number}>()
   // What the engine's seal would hold, by the backup's bytes: the entropy and the password or passkey output that
   // opens it.
   const backups = new Map<string, {entropy: Uint8Array; password?: string; key?: string}>()
@@ -82,11 +83,29 @@ const fakeHost = () => {
     }
     return found
   }
-  const seal = (id: string, entropy: Uint8Array, access: Access) => {
+  /** As the platform does: NFKD, then the bytes the engine hashes. */
+  const normalized = (passphrase: ArrayBuffer) =>
+    new TextEncoder().encode(new TextDecoder().decode(passphrase).normalize('NFKD')).buffer as ArrayBuffer
+  /** The seed of `entropy` under `passphrase`, made by the test engine as the binding makes it with the real one. */
+  const seedOf = (entropy: Uint8Array, passphrase: ArrayBuffer): Promise<NitroSeed> => {
+    const words = new TextEncoder().encode(entropyToMnemonic(entropy, wordlist))
+    return testHost().seedFromMnemonic(words.buffer as ArrayBuffer, normalized(passphrase))
+  }
+  /** What the binding seals beside the entropy: the fingerprint of the passphrase's wallet, made and disposed. */
+  const checkOf = async (entropy: Uint8Array, passphrase: ArrayBuffer) => {
+    if (passphrase.byteLength === 0) {
+      return undefined
+    }
+    const seed = await seedOf(entropy, passphrase)
+    const fingerprint = seed.fingerprint
+    seed.dispose()
+    return fingerprint
+  }
+  const seal = async (id: string, entropy: Uint8Array, access: Access, passphrase = new ArrayBuffer(0)) => {
     if (entries.has(id)) {
       throw new Error('CryptoVault.call(...): CV_ERR_EXISTS')
     }
-    entries.set(id, {access, entropy})
+    entries.set(id, {access, entropy, fingerprint: await checkOf(entropy, passphrase)})
   }
   const hex = (bytes: ArrayBuffer) => Buffer.from(bytes).toString('hex')
   /** The PRF output of the passkey the person uses: a new one under `name`, or the one they pick. */
@@ -127,13 +146,21 @@ const fakeHost = () => {
       backups.set(hex(sealed), {entropy: entropy.slice(), key})
       return sealed
     },
-    create: async (id: string, words: number, access: Access) => {
+    create: async (id: string, words: number, access: Access, _prompt: string, passphrase: ArrayBuffer) => {
+      calls.passphrases.push(passphrase)
       fail()
-      seal(id, globalThis.crypto.getRandomValues(new Uint8Array((words * 4) / 3)), access)
+      await seal(id, globalThis.crypto.getRandomValues(new Uint8Array((words * 4) / 3)), access, passphrase)
     },
     has: (id: string) => entries.has(id),
-    importMnemonic: async (id: string, mnemonic: ArrayBuffer, access: Access) => {
+    importMnemonic: async (
+      id: string,
+      mnemonic: ArrayBuffer,
+      access: Access,
+      _prompt: string,
+      passphrase: ArrayBuffer
+    ) => {
       calls.imported.push(mnemonic)
+      calls.passphrases.push(passphrase)
       fail()
       const words = new TextDecoder().decode(mnemonic)
       let entropy: Uint8Array
@@ -142,15 +169,23 @@ const fakeHost = () => {
       } catch {
         throw new Error('CryptoVault.importMnemonic(...): NC_ERR_MNEMONIC_CHECKSUM')
       }
-      seal(id, entropy, access)
+      await seal(id, entropy, access, passphrase)
     },
     passkeySupported: true,
     protection: (id: string) => (entry(id), 'secure-enclave' as Protection),
     remove: (id: string) => {
       entries.delete(id)
     },
-    restore: async (id: string, backup: ArrayBuffer, password: ArrayBuffer, access: Access) => {
+    restore: async (
+      id: string,
+      backup: ArrayBuffer,
+      password: ArrayBuffer,
+      access: Access,
+      _prompt: string,
+      passphrase: ArrayBuffer
+    ) => {
       calls.passwords.push(password)
+      calls.passphrases.push(passphrase)
       if (entries.has(id)) {
         throw new Error('CryptoVault.restore(...): CV_ERR_EXISTS')
       }
@@ -164,9 +199,17 @@ const fakeHost = () => {
       if (found.password !== hex(password)) {
         throw new Error('CryptoVault.restore(...): NC_ERR_VERIFICATION_FAILED')
       }
-      seal(id, found.entropy.slice(), access)
+      await seal(id, found.entropy.slice(), access, passphrase)
     },
-    restoreWithPasskey: async (id: string, backup: ArrayBuffer, relyingParty: string, access: Access) => {
+    restoreWithPasskey: async (
+      id: string,
+      backup: ArrayBuffer,
+      relyingParty: string,
+      access: Access,
+      _prompt: string,
+      passphrase: ArrayBuffer
+    ) => {
+      calls.passphrases.push(passphrase)
       if (entries.has(id)) {
         throw new Error('CryptoVault.restoreWithPasskey(...): CV_ERR_EXISTS')
       }
@@ -183,7 +226,7 @@ const fakeHost = () => {
       if (found.key !== key) {
         throw new Error('CryptoVault.restoreWithPasskey(...): CV_ERR_WRONG_PASSKEY')
       }
-      seal(id, found.entropy.slice(), access)
+      await seal(id, found.entropy.slice(), access, passphrase)
     },
     revealMnemonic: async (id: string) => {
       fail()
@@ -191,26 +234,34 @@ const fakeHost = () => {
       calls.revealed.push(buffer)
       return buffer
     },
-    supported: true,
-    unlock: async (id: string, _prompt: string, passphrase: ArrayBuffer) => {
+    setPassphrase: async (id: string, passphrase: ArrayBuffer) => {
       calls.passphrases.push(passphrase)
       fail()
-      const {entropy} = entry(id)
-      const words = new TextEncoder().encode(entropyToMnemonic(entropy, wordlist))
-      // As the platform does: NFKD, then the bytes the engine hashes.
-      const normalized = new TextEncoder().encode(new TextDecoder().decode(passphrase).normalize('NFKD'))
-      const seed: NitroSeed = await testHost().seedFromMnemonic(
-        words.buffer as ArrayBuffer,
-        normalized.buffer as ArrayBuffer
-      )
+      const found = entry(id)
+      entries.set(id, {...found, fingerprint: await checkOf(found.entropy, passphrase)})
+    },
+    supported: true,
+    unlock: async (id: string, _prompt: string, passphrase: ArrayBuffer, verifyPassphrase: boolean) => {
+      calls.passphrases.push(passphrase)
+      fail()
+      const {entropy, fingerprint} = entry(id)
+      const seed = await seedOf(entropy, passphrase)
+      if (verifyPassphrase && fingerprint !== undefined && seed.fingerprint !== fingerprint) {
+        seed.dispose()
+        throw new Error('CryptoVault.unlock(...): CV_ERR_WRONG_PASSPHRASE')
+      }
       return {seed, words: (entropy.length * 3) / 4}
     },
   }
 
   return {
     calls,
+    entries,
     failNext: (status: string) => (failNext = status),
     host: host as unknown as CryptoVault,
+    /** An entry as the vault sealed it before passphrase checks: the entropy alone. */
+    legacy: (id: string, mnemonic: string) =>
+      entries.set(id, {access: 'biometrics', entropy: mnemonicToEntropy(mnemonic, wordlist)}),
     pickPasskey: (name: string | undefined) => (pick = name),
   }
 }
@@ -351,7 +402,7 @@ describe('the vault', () => {
     assert.equal(vault.has('other'), false)
   })
 
-  test('unlocks under a BIP-39 passphrase, normalized as the platform does, and overwrites the bytes it handed over', async () => {
+  test('unlocks an entry given no passphrase under any, normalized as the platform does, and overwrites the bytes', async () => {
     const {calls, host} = fakeHost()
     const vault = createVaultOn(host, crypto)
     await vault.importMnemonic('main', ABANDON)
@@ -379,14 +430,112 @@ describe('the vault', () => {
       wallet.dispose()
     }
 
-    // Every passphrase crossed as bytes this package overwrote once the bridge had them, and never normalized here.
-    assert.equal(calls.passphrases.length, 5)
+    // Every passphrase crossed as bytes this package overwrote once the bridge had them, and never normalized here:
+    // the import's (none) and the five unlocks'.
+    assert.equal(calls.passphrases.length, 6)
     for (const passphrase of calls.passphrases) {
       assert.ok(new Uint8Array(passphrase).every(byte => byte === 0))
     }
 
     await rejectsCode(() => vault.unlock('main', {passphrase: 42 as never, prompt: 'Unlock'}), 'INVALID_ARGUMENT')
     await rejectsCode(() => vault.unlock('main', {passphrase: 'TREZOR', prompt: ''}), 'INVALID_ARGUMENT')
+  })
+
+  test('refuses a passphrase other than the one the entry was given, and disposes its wallet', async () => {
+    const {host} = fakeHost()
+    const vault = createVaultOn(host, crypto)
+    await vault.importMnemonic('main', ABANDON, {passphrase: 'TREZOR'})
+    const expected = await crypto.createEphemeralWallet({mnemonic: ABANDON, passphrase: 'TREZOR'})
+    const baseline = crypto.liveHandles()
+
+    // The passphrase it was given, as typed or decomposed: its wallet.
+    const wallet = await vault.unlock('main', {passphrase: 'TREZOR', prompt: 'Unlock'})
+    assert.equal(wallet.fingerprint, expected.fingerprint)
+    wallet.dispose()
+
+    // A typo, or none at all (the empty passphrase's wallet), is refused, and the wallet it made is gone.
+    await rejectsCode(() => vault.unlock('main', {passphrase: 'trezor', prompt: 'Unlock'}), 'WRONG_PASSPHRASE')
+    await rejectsCode(() => vault.unlock('main', {prompt: 'Unlock'}), 'WRONG_PASSPHRASE')
+    await rejectsCode(() => vault.unlock('main', {passphrase: '', prompt: 'Unlock'}), 'WRONG_PASSPHRASE')
+    assert.equal(crypto.liveHandles(), baseline)
+
+    // A person who keeps other wallets under other passphrases says so: every passphrase opens its wallet.
+    const decoy = await vault.unlock('main', {passphrase: 'decoy', prompt: 'Unlock', verifyPassphrase: false})
+    const plain = await vault.unlock('main', {prompt: 'Unlock', verifyPassphrase: false})
+    assert.notEqual(decoy.fingerprint, expected.fingerprint)
+    assert.equal(plain.fingerprint, 0x73c5da0a)
+    for (const opened of [decoy, plain, expected]) {
+      opened.dispose()
+    }
+
+    await rejectsCode(
+      () => vault.unlock('main', {passphrase: 'TREZOR', prompt: 'Unlock', verifyPassphrase: 'no' as never}),
+      'INVALID_ARGUMENT'
+    )
+  })
+
+  test('checks the passphrase a wallet is created, imported or restored with', async () => {
+    const {calls, host} = fakeHost()
+    const vault = createVaultOn(host, crypto, {relyingParty: RELYING_PARTY})
+
+    await vault.create('fresh', {passphrase: 'correct horse', words: 24})
+    const fresh = await vault.unlock('fresh', {passphrase: 'correct horse', prompt: 'Unlock'})
+    fresh.dispose()
+    await rejectsCode(() => vault.unlock('fresh', {passphrase: 'correct  horse', prompt: 'Unlock'}), 'WRONG_PASSPHRASE')
+
+    // A backup holds the entropy alone: the check is the restore's to set again, or there is none.
+    await vault.importMnemonic('main', ABANDON, {passphrase: 'TREZOR'})
+    const password = await vault.backup('main', {password: 'correct horse', prompt: 'Back up'})
+    const passkey = await vault.backup('main', {passkey: {name: 'Main wallet'}, prompt: 'Back up'})
+    await vault.restore('unchecked', password, {password: 'correct horse'})
+    const unchecked = await vault.unlock('unchecked', {passphrase: 'trezor', prompt: 'Unlock'})
+    unchecked.dispose()
+    await vault.restore('checked', password, {passphrase: 'TREZOR', password: 'correct horse'})
+    await vault.restore('passkey', passkey, {passkey: true, passphrase: 'TREZOR'})
+    for (const id of ['checked', 'passkey']) {
+      await rejectsCode(() => vault.unlock(id, {passphrase: 'trezor', prompt: 'Unlock'}), 'WRONG_PASSPHRASE')
+      const restored = await vault.unlock(id, {passphrase: 'TREZOR', prompt: 'Unlock'})
+      restored.dispose()
+    }
+
+    // Each passphrase crossed as bytes this package overwrote.
+    assert.ok(calls.passphrases.every(passphrase => new Uint8Array(passphrase).every(byte => byte === 0)))
+    await rejectsCode(() => vault.create('other', {passphrase: 7 as never}), 'INVALID_ARGUMENT')
+  })
+
+  test('opens an entry sealed before passphrase checks under any passphrase, until it is given one', async () => {
+    const {calls, host, legacy} = fakeHost()
+    const vault = createVaultOn(host, crypto)
+    legacy('old', ABANDON)
+
+    const plain = await vault.unlock('old', {prompt: 'Unlock'})
+    const other = await vault.unlock('old', {passphrase: 'anything', prompt: 'Unlock'})
+    assert.equal(plain.fingerprint, 0x73c5da0a)
+    assert.notEqual(other.fingerprint, plain.fingerprint)
+    plain.dispose()
+    other.dispose()
+
+    // Given one after the prompt, it checks it; null takes the check away again, and so does an empty passphrase.
+    await vault.setPassphrase('old', {passphrase: 'TREZOR', prompt: 'Check your passphrase'})
+    await rejectsCode(() => vault.unlock('old', {passphrase: 'anything', prompt: 'Unlock'}), 'WRONG_PASSPHRASE')
+    const trezor = await vault.unlock('old', {passphrase: 'TREZOR', prompt: 'Unlock'})
+    trezor.dispose()
+
+    await vault.setPassphrase('old', {passphrase: null, prompt: 'Stop checking'})
+    const again = await vault.unlock('old', {passphrase: 'anything', prompt: 'Unlock'})
+    again.dispose()
+    await vault.setPassphrase('old', {passphrase: 'TREZOR', prompt: 'Check your passphrase'})
+    await vault.setPassphrase('old', {passphrase: '', prompt: 'Stop checking'})
+    const empty = await vault.unlock('old', {passphrase: 'anything', prompt: 'Unlock'})
+    empty.dispose()
+
+    assert.ok(calls.passphrases.every(passphrase => new Uint8Array(passphrase).every(byte => byte === 0)))
+    await rejectsCode(() => vault.setPassphrase('missing', {passphrase: 'TREZOR', prompt: 'Check'}), 'NOT_FOUND')
+    await rejectsCode(() => vault.setPassphrase('old', {passphrase: 'TREZOR', prompt: ''}), 'INVALID_ARGUMENT')
+    await rejectsCode(
+      () => vault.setPassphrase('old', {passphrase: undefined as never, prompt: 'Check'}),
+      'INVALID_ARGUMENT'
+    )
   })
 
   test('backs a wallet up under a new passkey and restores it with the passkey', async () => {
@@ -525,6 +674,7 @@ describe('the vault', () => {
       'PASSKEY_NOT_FOUND',
       'PASSKEY_UNSUPPORTED',
       'WRONG_PASSKEY',
+      'WRONG_PASSPHRASE',
     ]) {
       assert.ok((VAULT_ERROR_CODES as readonly string[]).includes(code))
       assert.equal(toVaultError(new Error(`CryptoVault.backup(...): CV_ERR_${code}`)).code, code)

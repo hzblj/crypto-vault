@@ -32,14 +32,15 @@ const vault = createVault(crypto) // over the engine the app already made, with 
 
 | | |
 | --- | --- |
-| `vault.create(id, {words?, access?, prompt?})` | A fresh wallet (12 to 24 words), its entropy drawn and sealed natively |
-| `vault.importMnemonic(id, words, {access?, prompt?})` | A wallet restored from its words, sealed under `id`; the words cross as bytes the vault overwrites |
-| `vault.unlock(id, {prompt, passphrase?})` | After the system prompt, the entry as an `EphemeralWallet` in the engine, under a BIP-39 passphrase if given |
+| `vault.create(id, {words?, access?, prompt?, passphrase?})` | A fresh wallet (12 to 24 words), its entropy drawn and sealed natively, with a passphrase check if given |
+| `vault.importMnemonic(id, words, {access?, prompt?, passphrase?})` | A wallet restored from its words, sealed under `id`; the words cross as bytes the vault overwrites |
+| `vault.unlock(id, {prompt, passphrase?, verifyPassphrase?})` | After the system prompt, the entry as an `EphemeralWallet` in the engine, under a BIP-39 passphrase if given: `WRONG_PASSPHRASE` for another than the entry's |
+| `vault.setPassphrase(id, {passphrase, prompt})` | After the system prompt, the passphrase `unlock` checks from now on, or none for `null` |
 | `vault.revealMnemonic(id, {prompt})` | After the system prompt, the entry's words, for the user to write down |
 | `vault.backup(id, {password, prompt})` | After the system prompt, the entry sealed under a password: a `Uint8Array` that is safe to store anywhere |
 | `vault.backup(id, {passkey, prompt})` | The same under a passkey's PRF output: `{name}` registers a new passkey, `true` takes one the person has |
-| `vault.restore(id, backup, {password, access?, prompt?})` | A wallet restored from a backup, sealed under `id`, the entropy never in JavaScript |
-| `vault.restore(id, backup, {passkey: true, access?, prompt?})` | The same for a backup sealed under a passkey, which the person picks |
+| `vault.restore(id, backup, {password, access?, prompt?, passphrase?})` | A wallet restored from a backup, sealed under `id`, the entropy never in JavaScript |
+| `vault.restore(id, backup, {passkey: true, access?, prompt?, passphrase?})` | The same for a backup sealed under a passkey, which the person picks |
 | `vault.backupKind(backup)` | `'password'` or `'passkey'`: what opens a backup, read from its header |
 | `vault.has(id)`, `vault.protection(id)`, `vault.access(id)` | Whether there is an entry, what holds its key, who opens it |
 | `vault.availableProtection`, `vault.backupSupported`, `vault.passkeySupported` | What a new entry gets on this device; whether the engine seals backups; whether passkey backups work here |
@@ -61,6 +62,7 @@ Every error is a `VaultError` with a `code`:
 | `WEAK_PASSWORD` | A backup password shorter than 8 characters |
 | `WRONG_PASSWORD` | The password does not open the backup, or the backup was changed (the two fail alike) |
 | `WRONG_PASSKEY` | The passkey the person picked does not open the backup, or the backup was changed |
+| `WRONG_PASSPHRASE` | The entry was given another BIP-39 passphrase: the wallet this one makes is not its wallet |
 | `NEEDS_PASSKEY`, `NEEDS_PASSWORD` | The backup is sealed under the other kind of secret: said before anything is asked |
 | `PASSKEY_UNSUPPORTED` | No passkeys with the PRF extension here (before iOS 18 or Android 9), a provider without it, or, when sealing, a passkey on another device |
 | `PASSKEY_NOT_FOUND` | Android: no passkey of the relying party on this device (iOS shows its own sheet instead) |
@@ -91,20 +93,41 @@ and later keep a key for every use.
 ## A BIP-39 passphrase
 
 ```ts
-const wallet = await vault.unlock('main', {passphrase, prompt: 'Unlock your wallet'})
-wallet.fingerprint // show it: every passphrase opens a wallet
+// Ask the person for it twice: the vault cannot tell a typo from another wallet's passphrase.
+await vault.importMnemonic('main', words, {passphrase})
+await vault.setPassphrase('main', {passphrase, prompt: 'Check your passphrase'}) // an entry that has none yet
+
+const wallet = await vault.unlock('main', {passphrase, prompt: 'Unlock your wallet'}) // WRONG_PASSPHRASE for a typo
+await vault.unlock('main', {passphrase: decoy, prompt: 'Unlock', verifyPassphrase: false}) // any passphrase's wallet
+await vault.setPassphrase('main', {passphrase: null, prompt: 'Stop checking'}) // no check from now on
 ```
 
-The passphrase (the "25th word") makes another seed from the same entropy, so the same entry opens a different wallet
-for every passphrase. The vault never stores it and cannot check it: **a mistyped passphrase opens a different,
-empty wallet, silently.** That is BIP-39's design (it is what makes a hidden wallet deniable), so an app shows
-`wallet.fingerprint` and lets the person compare it with the one they wrote down. No passphrase and an empty one are
-the same wallet.
+The passphrase (the "25th word") makes another seed from the same entropy, so the same words make a different wallet
+for every passphrase. BIP-39 gives a passphrase no checksum: a mistyped one makes a valid, empty wallet, and nothing in
+the words can tell. So the vault remembers what to expect. When an entry is given a passphrase (`create`,
+`importMnemonic` and `restore` take one, `setPassphrase` gives or takes it later), the vault computes the BIP-32
+fingerprint of the wallet it makes, natively, and seals those 4 bytes with the entropy, inside the Secure Enclave's
+ECIES or the Keystore's AES-GCM: not in the entry's readable metadata, and never the passphrase itself. `unlock` opens
+the entry, makes the seed and compares fingerprints; another passphrase's wallet is disposed before JavaScript sees it,
+and the call fails with `WRONG_PASSPHRASE`. Leaving the passphrase out is the empty passphrase, which is checked like
+any other.
+
+- **Ask for it twice.** What `create`, `importMnemonic`, `restore` or `setPassphrase` is given is the passphrase
+  `unlock` holds every other to: a typo there is the one it accepts.
+- **One in 2^32.** The fingerprint is 4 bytes, so a wrong passphrase passes the check about once in four billion tries.
+  That catches typos, not a search: the passphrase is no secret the check protects.
+- **Hidden wallets.** A stored fingerprint says which passphrase is the real one to anyone who can open the entry (it
+  takes the person's biometrics or passcode). Whoever keeps decoy or hidden wallets under other passphrases unlocks
+  with `verifyPassphrase: false`, or gives the entry no passphrase at all.
+- **Entries from before 0.3.0,** and entries given none, hold no check and open under any passphrase, as before: show
+  `wallet.fingerprint` for the person to compare. `setPassphrase` gives one a check (Android asks twice, once to open
+  and once to seal again; iOS once).
+- **Backups hold the entropy alone.** A restored wallet needs its passphrase again: pass it to `restore` to check it
+  there too.
 
 It crosses into native code as UTF-8 bytes the vault overwrites, as typed words do; the platform NFKD-normalizes it
 (Foundation on iOS, `java.text.Normalizer` on Android), as BIP-39 requires, so the same characters typed on any
-keyboard make the seed other wallets make. At most 1024 bytes once normalized. Backups hold the entropy, not the
-passphrase: a restored wallet needs its passphrase again to unlock.
+keyboard make the seed other wallets make. At most 1024 bytes once normalized. An empty passphrase is no passphrase.
 
 ## Moving a wallet to another device
 
@@ -192,4 +215,4 @@ build signed with the entitlement and a passwords app signed in to its account: 
 A credential id to send the person straight to one passkey (the system's sheet lists the relying party's). Removing a
 passkey a provider without the PRF extension made: neither platform lets an app delete one.
 
-[Security](https://github.com/hzblj/crypto-vault/blob/main/SECURITY.md) · [ADR 0001](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0001-hardware-sealed-entropy.md) · [ADR 0002](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0002-password-sealed-backup.md) · [ADR 0003](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0003-passkey-sealed-backup.md) · [ADR 0004](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0004-device-credential-before-api-30.md)
+[Security](https://github.com/hzblj/crypto-vault/blob/main/SECURITY.md) · [ADR 0001](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0001-hardware-sealed-entropy.md) · [ADR 0002](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0002-password-sealed-backup.md) · [ADR 0003](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0003-passkey-sealed-backup.md) · [ADR 0004](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0004-device-credential-before-api-30.md) · [ADR 0005](https://github.com/hzblj/crypto-vault/blob/main/docs/adr/0005-passphrase-check.md)

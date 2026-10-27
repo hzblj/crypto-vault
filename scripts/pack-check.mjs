@@ -33,6 +33,7 @@ const REQUIRED = {
     'nitro.json',
     'CryptoVault.podspec',
     'cpp/HybridCryptoVault.cpp',
+    'cpp/VaultPayload.hpp',
     'cpp/VaultPlatform.h',
     'ios/VaultPlatform.swift',
     'ios/VaultPasskey.swift',
@@ -116,15 +117,20 @@ export const vaulted = async () => {
   const words: string = await vault.revealMnemonic('main', {prompt: 'Show your recovery phrase'})
   wallet.dispose()
 
+  await vault.create('checked', {passphrase: 'TREZOR'})
+  await vault.setPassphrase('main', {passphrase: 'TREZOR', prompt: 'Check your passphrase'})
+  await vault.setPassphrase('main', {passphrase: null, prompt: 'Stop checking'})
   const hidden = await vault.unlock('main', {passphrase: 'TREZOR', prompt: 'Unlock your hidden wallet'})
+  const decoy = await vault.unlock('main', {passphrase: 'decoy', prompt: 'Unlock', verifyPassphrase: false})
   const fingerprint: number = hidden.fingerprint
   hidden.dispose()
+  decoy.dispose()
   const backup: Uint8Array = await vault.backup('main', {password: 'correct horse', prompt: 'Back up'})
   const passkeyBackup = await vault.backup('main', {passkey: {name: 'Main wallet'}, prompt: 'Back up'})
   await vault.backup('main', {passkey: true, prompt: 'Back up'})
   const kind: BackupKind = vault.backupKind(passkeyBackup)
   await vault.restore('copy', passkeyBackup, {access: 'biometrics', passkey: true})
-  await vault.restore('copy', backup, {password: 'correct horse'})
+  await vault.restore('copy', backup, {passphrase: 'TREZOR', password: 'correct horse'})
   const passkeys: boolean = vault.passkeySupported
 
   // @ts-expect-error: unlocking says why
@@ -135,10 +141,12 @@ export const vaulted = async () => {
   await wallet.deriveAccount({chain: 'bitcoin', index: 0})
   // @ts-expect-error: a backup has a password or a passkey, not both
   await vault.backup('main', {passkey: true, password: 'correct horse', prompt: 'Back up'})
+  // @ts-expect-error: no check is undefined: null says so
+  await vault.setPassphrase('main', {prompt: 'Stop checking'})
   // @ts-expect-error: a restore picks an existing passkey, it makes none
   await vault.restore('copy', passkeyBackup, {passkey: {name: 'Main wallet'}})
 
-  return [protection, signature, words, fingerprint, kind, passkeys, isVaultError(new VaultError('WRONG_PASSKEY'))]
+  return [protection, signature, words, fingerprint, kind, passkeys, isVaultError(new VaultError('WRONG_PASSPHRASE'))]
 }
 `
 

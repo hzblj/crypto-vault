@@ -137,6 +137,24 @@ extern "C" cv_result cv_platform_open(const char* id, size_t id_len, const char*
   });
 }
 
+extern "C" cv_result cv_platform_reseal(const char* id, size_t id_len, const uint8_t* secret, size_t secret_len,
+                                        const char* prompt, size_t prompt_len) {
+  if (id == nullptr || secret == nullptr || secret_len == 0) {
+    return CV_ERR_INVALID_ARGUMENT;
+  }
+  return onJvm([&] {
+    static const auto method =
+        JVaultKeystore::javaClassStatic()->getStaticMethod<jint(jstring, jni::JArrayByte::javaobject, jstring)>(
+            "reseal");
+    auto bytes = jni::JArrayByte::newArray(secret_len);
+    bytes->setRegion(0, secret_len, reinterpret_cast<const jbyte*>(secret));
+    const jint status = method(JVaultKeystore::javaClassStatic(), jni::make_jstring(text(id, id_len)).get(),
+                               bytes.get(), jni::make_jstring(text(prompt, prompt_len)).get());
+    wipe(bytes);
+    return static_cast<int32_t>(status);
+  });
+}
+
 extern "C" cv_result cv_platform_info(const char* id, size_t id_len, int32_t* protection, int32_t* access) {
   if (id == nullptr || protection == nullptr || access == nullptr) {
     return CV_ERR_INVALID_ARGUMENT;

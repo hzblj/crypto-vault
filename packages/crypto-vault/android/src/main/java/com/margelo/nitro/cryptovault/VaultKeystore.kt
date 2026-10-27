@@ -405,6 +405,45 @@ object VaultKeystore {
     }
   }
 
+  /**
+   * The entry under `id` sealed anew under its own key, its protection and access kept: the key works only after the
+   * person, so `prompt` shows first. The new entry is written beside the old one under a name no id has (`~`), then
+   * moved over it, so the entry is the old one or the new one, never neither.
+   */
+  @JvmStatic
+  fun reseal(id: String, secret: ByteArray, prompt: String): Int {
+    if (id.isEmpty() || secret.isEmpty()) {
+      return INVALID_ARGUMENT
+    }
+    return try {
+      val target = file(id)
+      if (!target.exists()) {
+        return NOT_FOUND
+      }
+      val entry = target.readBytes()
+      if (entry.size < 4 || entry[0] != ENTRY_VERSION) {
+        return FAILED
+      }
+      val protection = entry[1]
+      val access = entry[2].toInt()
+
+      val key = keyStore().getKey(alias(id), null) as? SecretKey ?: return INVALIDATED
+      val cipher = authorizedCipher(key, prompt, access) { init(Cipher.ENCRYPT_MODE, key) }
+      val sealed = cipher.doFinal(secret)
+      val iv = cipher.iv
+
+      val next = File(target.parentFile, "${target.name}~")
+      next.writeBytes(byteArrayOf(ENTRY_VERSION, protection, access.toByte(), iv.size.toByte()) + iv + sealed)
+      if (!next.renameTo(target)) {
+        next.delete()
+        return FAILED
+      }
+      OK
+    } catch (error: Throwable) {
+      statusOf(error)
+    }
+  }
+
   /** `[status, protection, access]` without opening anything. */
   @JvmStatic
   fun info(id: String): IntArray {
