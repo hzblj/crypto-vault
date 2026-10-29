@@ -76,4 +76,8 @@ yarn pack:check      # what npm receives, and a consumer type-check
 yarn ios             # the example on the iOS simulator (yarn android for Android)
 ```
 
+## Sponsorship
+
+<a href="https://www.buymeacoffee.com/hzblj"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="48"></a>
+
 [Security](./SECURITY.md) · [MIT](./LICENSE)
